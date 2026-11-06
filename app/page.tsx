@@ -6,6 +6,7 @@ import { inspectWriting, type StoryPrompt } from "@/lib/challenge";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { ShareResult } from "@/components/ShareResult";
 import { ResultDetails } from "@/components/ResultDetails";
+import { SuccessFireworks } from "@/components/SuccessFireworks";
 import type { CheckDetails } from "@/lib/validation";
 
 type Challenge = { id: string; prompt: StoryPrompt; state: string; createdAt: number; expiresAt: number; minWords: number; maxWords: number };
@@ -177,22 +178,22 @@ export default function Home() {
       <a className="skip-link" href="#challenge">Skip to prompt</a>
       <header className="site-header">
         {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- Returning home reloads the server-backed session state. */}
-        <a className="brand" href="/" aria-label="Writing CAPTCHA home"><span className="brand-symbol"><Fingerprint size={24} strokeWidth={1.6} /></span>Writing CAPTCHA</a>
+        <a className="brand" href="/" aria-label="HumansOnly home"><span className="brand-symbol"><Fingerprint size={24} strokeWidth={1.6} /></span>HumansOnly</a>
         <ThemeSwitch />
       </header>
       <main>
         <div className="main-grid">
           <section className="introduction">
-            <h1>Pangram CAPTCHA demo</h1>
-            <p className="intro-copy">Write a short story. Pass both checks to open the protected page.</p>
-            {overall && <div className="overall-stats" aria-label="Overall results"><span>Overall:</span><span><strong>{overall.attempts}</strong> {overall.attempts === 1 ? "attempt" : "attempts"}</span><span><strong>{overall.passed}</strong> passed</span><span><strong>{overall.failed}</strong> failed</span>{overall.errors > 0 && <span>{overall.errors} service {overall.errors === 1 ? "error" : "errors"}</span>}{overall.unfinished > 0 && <span>{overall.unfinished} unfinished</span>}</div>}
+            <h1>Captcha Experiment</h1>
+            <p className="intro-copy">See if your favorite LLM can get past the defenses. Good luck!</p>
+            {overall && <div className="overall-stats" aria-label="Stats (Since Launch)"><span>Stats (Since Launch):</span><span><strong>{overall.attempts}</strong> {overall.attempts === 1 ? "attempt" : "attempts"}</span><span><strong>{overall.passed}</strong> passed</span><span><strong>{overall.failed}</strong> failed</span>{overall.errors > 0 && <span>{overall.errors} service {overall.errors === 1 ? "error" : "errors"}</span>}{overall.unfinished > 0 && <span>{overall.unfinished} unfinished</span>}</div>}
           </section>
           <section className={`challenge-card ${phase === "writing" ? "is-writing" : ""}`} id="challenge" aria-label="Writing challenge">
             <div className="card-topline"><span><span className={`status-dot ${phase === "passed" || phase === "room" ? "success" : ""}`} />{phase === "passed" || phase === "room" ? "ACCESS GRANTED" : "WRITING CHECK"}</span><span>3 tries</span></div>
             {configured === false && !["passed", "room", "closed"].includes(phase) && <div className="setup-notice" role="status"><strong>Checks unavailable.</strong> {serviceMessage || "You can still view a prompt."}</div>}
             {phase === "intro" && <div className="welcome-content">
               <h2 ref={heading} tabIndex={-1}>Get a random prompt</h2>
-              <p>Write 180–240 words using the setting and time, characters, and conflict you’re given. There’s always a cat involved. Codex checks the story requirements; Pangram checks for AI writing. You get 3 tries.</p>
+              <p>Write 180–240 words using the setting and time, characters, and conflict you’re given. There’s always a cat involved. Your story is checked for AI writing and the prompt requirements. You get 3 tries.</p>
               <button className="primary-button" onClick={start} disabled={busy || automated || configured === null || !!closedReason}>{busy ? "Loading…" : "Get prompt"}<ArrowRight size={19} /></button>
             </div>}
             {phase === "closed" && <div className="result-content"><h2 ref={heading} tabIndex={-1}>{closedReason === "attempts" ? "No tries left" : "Demo budget reached"}</h2><p>{serviceMessage}</p></div>}
@@ -205,10 +206,10 @@ export default function Home() {
               <label className="sr-only" htmlFor="story">Your short story</label>
               <div className="editor-wrap"><textarea ref={editor} id="story" value={text} onChange={e => setText(e.target.value)} placeholder="Write or paste your response…" maxLength={8000} aria-describedby="word-count writing-privacy" disabled={busy || expired} spellCheck /><div className="editor-bottom"><span>Draft saved in this tab</span><span id="word-count" className={writing.count > challenge.maxWords ? "over-limit" : writing.valid ? "count-ready" : ""}>{writing.count} <span>/ {challenge.minWords}–{challenge.maxWords} words</span></span></div></div>
               {expired ? <button className="primary-button" type="button" onClick={start} disabled={busy}>New prompt <RotateCcw size={17} /></button> : <button className="primary-button" type="submit" disabled={!writing.valid || !configured || busy}>{busy ? "Submitting…" : closedReason ? "No checks available" : configured ? "Check writing" : "Checks unavailable"}<ArrowRight size={19} /></button>}
-              <p className="submission-note" id="writing-privacy">Your text goes to Pangram and OpenAI. This site does not save it.</p>
+              <p className="submission-note" id="writing-privacy">Your text goes to external verification services. This site does not save it.</p>
             </form>}
             {phase === "checking" && <div className="result-content" aria-live="polite"><h2 ref={heading} tabIndex={-1}>Checking…</h2><p>Checking AI writing and story requirements. This may take a minute.</p><div className="loading-track"><span /></div></div>}
-            {phase === "passed" && <div className="result-content"><div className="result-icon passed"><ShieldCheck size={35} strokeWidth={1.3} /></div><h2 ref={heading} tabIndex={-1}>Passed</h2><p>Both checks passed.</p><button className="primary-button" onClick={enterRoom} disabled={busy}>{busy ? "Opening…" : "Open protected page"}<ArrowRight size={19} /></button><span className="quiet-label">Access expires at {accessExpiresAt ? new Date(accessExpiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "the end of this session"}.</span></div>}
+            {phase === "passed" && <div className="result-content">{checks && challenge && <SuccessFireworks key={challenge.id} />}<div className="result-icon passed"><ShieldCheck size={35} strokeWidth={1.3} /></div><h2 ref={heading} tabIndex={-1}>Passed</h2><p>Both checks passed.</p><button className="primary-button" onClick={enterRoom} disabled={busy}>{busy ? "Opening…" : "Open protected page"}<ArrowRight size={19} /></button><span className="quiet-label">Access expires at {accessExpiresAt ? new Date(accessExpiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "the end of this session"}.</span></div>}
             {phase === "room" && room && <div className="result-content"><h2 ref={heading} tabIndex={-1}>Protected page</h2><p>{room.message}</p><div className="room-receipt"><Check size={15} /> Access confirmed</div></div>}
             {(phase === "rejected" || phase === "error") && <div className="result-content"><h2 ref={heading} tabIndex={-1}>{phase === "rejected" ? "Did not pass" : "Check failed"}</h2><p>{phase === "rejected" ? "One or both checks did not pass. See the results below." : "The service could not complete the check. No access was granted."}</p><button className="primary-button" onClick={start} disabled={busy || !!closedReason}>New prompt <ArrowRight size={19} /></button>{phase === "rejected" && checks?.detectorPassed === false && <button className="text-button" onClick={report} disabled={busy || reported}>{reported ? "Report saved" : "I wrote this myself. Report a false positive."}</button>}<span className="quiet-label">{attemptsRemaining} {attemptsRemaining === 1 ? "try" : "tries"} left.</span></div>}
             {checks && ["passed", "rejected", "room"].includes(phase) && <ResultDetails checks={checks} />}
@@ -219,7 +220,7 @@ export default function Home() {
         </div>
         <section className="faq-section" id="how-it-works" aria-label="Details">
           <details><summary>Data and privacy<span>+</span></summary><p>Text goes to Pangram for AI detection and OpenAI for the story check. This site does not save the text. Drafts stay in this tab. Prompt details, counts, timings, results, and feedback are removed after 30 days when a new prompt is issued. Anonymous attempt records and totals stay for this test. The session cookie lasts up to a year. See <a href="https://www.pangram.com/privacy-policy" target="_blank" rel="noreferrer">Pangram’s privacy policy</a> and <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noreferrer">OpenAI’s privacy policy</a> for their handling of submitted text.</p></details>
-          <details><summary>What does a pass mean?<span>+</span></summary><p>Pangram classified the text as human-written and Codex found the story requirements met. Either check can be wrong. A pass does not prove you are human. Access lasts one hour.</p></details>
+          <details><summary>What does a pass mean?<span>+</span></summary><p>The text was classified as human-written and met the story requirements. Either check can be wrong. A pass does not prove you are human. Access lasts one hour.</p></details>
           <details><summary>Writing options<span>+</span></summary><p>Type, paste, or dictate. Prompts are in English and expire after 30 minutes. There is no alternate verification method in this demo.</p></details>
         </section>
       </main>

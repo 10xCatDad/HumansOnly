@@ -32,14 +32,14 @@ export function ShareResult({ text, prompt, result, checks }: Props) {
     }
     const conceptSummary = `Codex story check: ${conceptsPass(checks.concepts) ? "PASS" : "FAIL"} | Setting ${checks.concepts.setting ? "yes" : "no"}, characters ${checks.concepts.characters ? "yes" : "no"}, conflict ${checks.concepts.conflict ? "yes" : "no"}, story ${checks.concepts.story ? "yes" : "no"}`;
     const sections = [
-      `Pangram: ${percent(checks.pangram.human)} human, ${percent(checks.pangram.ai)} AI, ${percent(checks.pangram.assisted)} AI-assisted`,
+      `AI detection: ${percent(checks.pangram.human)} human, ${percent(checks.pangram.ai)} AI, ${percent(checks.pangram.assisted)} AI-assisted`,
       conceptSummary, `Setting / time: ${prompt.setting}`, `Characters: ${prompt.characters}`, `Conflict: ${prompt.conflict}`, text,
     ].map(wrap);
     canvas.width = width;
     canvas.height = 270 + sections.reduce((sum, lines) => sum + lines.length * lineHeight + 28, 0);
     ctx.fillStyle = "#10141d"; ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "#f3f5fa"; ctx.font = "bold 38px Arial";
-    ctx.fillText(`Writing CAPTCHA: ${result === "passed" ? "PASS" : "FAIL"}`, padding, 86);
+    ctx.fillText(`HumansOnly: ${result === "passed" ? "PASS" : "FAIL"}`, padding, 86);
     ctx.font = "24px Arial";
     let y = 142;
     sections.forEach((lines, index) => {

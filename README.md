@@ -1,4 +1,4 @@
-# Writing CAPTCHA
+# HumansOnly
 
 A small experiment: write a 180–240-word story using three randomly assigned concepts. Every prompt includes cats.
 

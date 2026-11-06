@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Monitor, Sun, Moon } from "lucide-react";
 import { resolveTheme, THEME_KEY, type ThemePreference } from "@/lib/theme";
+
+const choices = [
+  { value: "system", label: "System theme", title: "System: follow your device", Icon: Monitor },
+  { value: "light", label: "Light theme", title: "Light theme", Icon: Sun },
+  { value: "dark", label: "Dark theme", title: "Dark theme", Icon: Moon },
+] as const;
 
 export function ThemeSwitch() {
   const [preference, setPreference] = useState<ThemePreference>("system");
@@ -26,9 +33,11 @@ export function ThemeSwitch() {
     queries.forEach(q => q.addEventListener?.("change", apply));
     return () => queries.forEach(q => q.removeEventListener?.("change", apply));
   }, [preference, ready]);
-  return <select className="theme-select" aria-label="Color theme" value={preference} onChange={event => {
-    const next = event.target.value as ThemePreference;
+  function choose(next: ThemePreference) {
     setPreference(next);
     try { localStorage.setItem(THEME_KEY, next); } catch { /* Storage is optional. */ }
-  }}><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>;
+  }
+  return <div className="theme-switch" role="group" aria-label="Color theme">
+    {choices.map(({ value, label, title, Icon }) => <button key={value} type="button" aria-label={label} title={title} aria-pressed={preference === value} onClick={() => choose(value)}><Icon size={18} strokeWidth={1.7} aria-hidden="true" /></button>)}
+  </div>;
 }

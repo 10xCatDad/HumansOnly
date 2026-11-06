@@ -30,7 +30,7 @@ async function mockApi(page, {configured=true, outcome='passed', attemptsRemaini
 test('desktop page loads and protected API denies an anonymous browser',async({page,request})=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto('/');
-  await expect(page.getByRole('heading',{level:1})).toContainText('Pangram CAPTCHA demo');
+  await expect(page.getByRole('heading',{level:1})).toContainText('Captcha Experiment');
   await expect(page.getByRole('link',{name:'@10xCatDad'})).toHaveAttribute('href','https://x.com/10xCatDad');
   await expect(page.getByRole('button',{name:'Get prompt'})).toBeEnabled();
   const response=await request.get('/api/room');expect(response.status()).toBe(401);
@@ -99,7 +99,7 @@ test('budget closing during writing preserves the draft and disables another sub
 });
 test('public totals keep provider errors separate from failed checks',async({page})=>{
   await mockApi(page);await page.goto('/');
-  const totals=page.locator('[aria-label="Overall results"]');
+  const totals=page.locator('[aria-label="Stats (Since Launch)"]');
   await expect(totals).toContainText('8 attempts');
   await expect(totals).toContainText('3 passed');
   await expect(totals).toContainText('4 failed');
@@ -110,10 +110,10 @@ test('themes follow the system, preserve explicit choice, and fall back to dark'
   await mockApi(page);await page.emulateMedia({colorScheme:'dark'});await page.goto('/');
   await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
   await page.emulateMedia({colorScheme:'light'});await expect(page.locator('html')).toHaveAttribute('data-theme','light');
-  await page.getByRole('combobox',{name:'Color theme'}).selectOption('dark');await page.reload();
+  await page.getByRole('button',{name:'Dark theme',exact:true}).click();await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
-  await expect(page.getByRole('combobox')).toHaveValue('dark');
-  await page.getByRole('combobox').selectOption('system');await expect(page.locator('html')).toHaveAttribute('data-theme','light');
+  await expect(page.getByRole('button',{name:'Dark theme',exact:true})).toHaveAttribute('aria-pressed','true');
+  await page.getByRole('button',{name:'System theme',exact:true}).click();await expect(page.locator('html')).toHaveAttribute('data-theme','light');
   await page.addInitScript(()=>{window.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});});
   await page.reload();await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
 });
@@ -140,5 +140,5 @@ test('result includes both checks and a full-submission image with a prefilled X
   expect(url.hostname).toBe('twitter.com');const copy=url.searchParams.get('text');
   expect(copy).toContain('@10xCatDad');expect(copy).toContain('FAIL');expect(copy).toContain('75% AI');expect(copy).toContain('Codex story check: PASS');expect(copy.length).toBeLessThan(280);
   await page.screenshot({path:'outputs/result-dark.png',fullPage:true});
-  await page.getByRole('combobox').selectOption('light');await page.screenshot({path:'outputs/result-light.png',fullPage:true});
+  await page.getByRole('button',{name:'Light theme',exact:true}).click();await page.screenshot({path:'outputs/result-light.png',fullPage:true});
 });

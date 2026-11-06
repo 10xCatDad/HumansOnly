@@ -11,3 +11,5 @@
 - Results and X sharing must include Pangram text percentages and the Codex concept check. Do not describe scores as the probability that a visitor is human.
 - Agent opt-out notices and automation checks are deterrents only. Preserve paste, dictation, and accessibility.
 - Public GitHub commits use `10xCatDad <353330524+10xCatDad@users.noreply.github.com>`. Keep the private hosting repository's history and deployment identifiers out of that mirror.
+- The site brand is HumansOnly. Dark mode uses black surfaces and neon green accents; light mode keeps its neutral palette. Use icons for theme choices.
+- Keep detector branding out of prominent copy and share text. Retain the provider link in the footer and accurate provider disclosure in the privacy details.

@@ -1,11 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
-<rect width="1200" height="630" fill="#f7f6f2"/>
-<rect x="66" y="64" width="48" height="48" rx="10" fill="#3c5093"/>
-<g transform="translate(66 64)" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round"><path d="M12 24a12 12 0 0 1 24 0v5M16 32V24a8 8 0 0 1 16 0v10M20 36V24a4 4 0 0 1 8 0v12M24 24v14M12 28v4"/></g>
-<text x="66" y="260" font-family="Arial,Helvetica,sans-serif" font-size="68" font-weight="600" letter-spacing="-2" fill="#26292e">Writing CAPTCHA</text>
-<text x="69" y="320" font-family="Arial,Helvetica,sans-serif" font-size="30" fill="#626a77">Pangram demo</text>
-<text x="69" y="398" font-family="Arial,Helvetica,sans-serif" font-size="26" fill="#26292e">Write 180–240 words. Three tries.</text>
-<path d="M66 550H1134" stroke="#e2e3e5"/>
-<text x="66" y="593" font-family="Arial,Helvetica,sans-serif" font-size="20" fill="#3c5093">captcha.10xcatdad.xyz</text>
-<text x="1134" y="593" text-anchor="end" font-family="Arial,Helvetica,sans-serif" font-size="20" fill="#626a77">@10xCatDad</text>
+<rect width="1200" height="630" fill="#000000"/>
+<rect x="66" y="64" width="48" height="48" rx="10" fill="#54ff81"/>
+<g transform="translate(66 64)" fill="none" stroke="#031207" stroke-width="1.7" stroke-linecap="round"><path d="M12 24a12 12 0 0 1 24 0v5M16 32V24a8 8 0 0 1 16 0v10M20 36V24a4 4 0 0 1 8 0v12M24 24v14M12 28v4"/></g>
+<text x="66" y="260" font-family="Arial,Helvetica,sans-serif" font-size="68" font-weight="600" letter-spacing="-2" fill="#dcffe5">HumansOnly</text>
+<text x="69" y="320" font-family="Arial,Helvetica,sans-serif" font-size="30" fill="#93b69e">Captcha Experiment</text>
+<text x="69" y="398" font-family="Arial,Helvetica,sans-serif" font-size="26" fill="#dcffe5">See if your favorite LLM can get past the defenses. Good luck!</text>
+<path d="M66 550H1134" stroke="#1e3b29"/>
+<text x="66" y="593" font-family="Arial,Helvetica,sans-serif" font-size="20" fill="#54ff81">captcha.10xcatdad.xyz</text>
+<text x="1134" y="593" text-anchor="end" font-family="Arial,Helvetica,sans-serif" font-size="20" fill="#93b69e">@10xCatDad</text>
 </svg>

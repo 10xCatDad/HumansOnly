@@ -3,12 +3,12 @@ import "./globals.css";
 import { themeScript } from "@/lib/theme";
 
 export const metadata: Metadata = {
-  title: "Writing CAPTCHA",
-  description: "Pangram writing CAPTCHA demo. Write 180–240 words. Three tries.",
+  title: "HumansOnly | Captcha Experiment",
+  description: "See if your favorite LLM can get past the defenses. Good luck!",
   metadataBase: new URL("https://captcha.10xcatdad.xyz"),
   alternates: { canonical: "https://captcha.10xcatdad.xyz/" },
-  openGraph: { type: "website", title: "Writing CAPTCHA", description: "Pangram demo. Write 180–240 words. Three tries.", images: [{ url: "/social-card.png", width: 1200, height: 630, alt: "Writing CAPTCHA: Pangram demo" }] },
-  twitter: { card: "summary_large_image", title: "Writing CAPTCHA", description: "Pangram demo. Write 180–240 words. Three tries.", images: ["/social-card.png"] },
+  openGraph: { type: "website", title: "HumansOnly | Captcha Experiment", description: "See if your favorite LLM can get past the defenses. Good luck!", images: [{ url: "/social-card.png", width: 1200, height: 630, alt: "HumansOnly: Captcha Experiment" }] },
+  twitter: { card: "summary_large_image", title: "HumansOnly | Captcha Experiment", description: "See if your favorite LLM can get past the defenses. Good luck!", images: ["/social-card.png"] },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
