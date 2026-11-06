@@ -30,29 +30,36 @@ export function ShareResult({ text, prompt, result, checks }: Props) {
       }
       return lines;
     }
-    const conceptSummary = `Codex story check: ${conceptsPass(checks.concepts) ? "PASS" : "FAIL"} | Setting ${checks.concepts.setting ? "yes" : "no"}, characters ${checks.concepts.characters ? "yes" : "no"}, conflict ${checks.concepts.conflict ? "yes" : "no"}, story ${checks.concepts.story ? "yes" : "no"}`;
+    const conceptSummary = `Story validation (Codex): ${conceptsPass(checks.concepts) ? "PASS" : "FAIL"}\nSetting ${checks.concepts.setting ? "yes" : "no"} · Characters ${checks.concepts.characters ? "yes" : "no"} · Conflict ${checks.concepts.conflict ? "yes" : "no"} · Coherent story ${checks.concepts.story ? "yes" : "no"}`;
     const sections = [
-      `AI detection: ${percent(checks.pangram.human)} human, ${percent(checks.pangram.ai)} AI, ${percent(checks.pangram.assisted)} AI-assisted`,
-      conceptSummary, `Setting / time: ${prompt.setting}`, `Characters: ${prompt.characters}`, `Conflict: ${prompt.conflict}`, text,
+      `Cloudflare precheck: ${checks.precheck === "passed" ? "PASS" : "not run"}`,
+      conceptSummary,
+      `AI detection: ${checks.detectorPassed ? "PASS" : "FAIL"}\n${percent(checks.pangram.human)} human · ${percent(checks.pangram.ai)} AI · ${percent(checks.pangram.assisted)} AI-assisted\nShare of text classified in each category.`,
+      `Setting / time: ${prompt.setting}`, `Characters: ${prompt.characters}`, `Conflict: ${prompt.conflict}`, text,
     ].map(wrap);
     canvas.width = width;
     canvas.height = 270 + sections.reduce((sum, lines) => sum + lines.length * lineHeight + 28, 0);
-    ctx.fillStyle = "#10141d"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#f3f5fa"; ctx.font = "bold 38px Arial";
+    ctx.fillStyle = "#000000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = result === "passed" ? "#54ff81" : "#ff9696"; ctx.font = "bold 38px Arial";
     ctx.fillText(`HumansOnly: ${result === "passed" ? "PASS" : "FAIL"}`, padding, 86);
     ctx.font = "24px Arial";
     let y = 142;
     sections.forEach((lines, index) => {
-      ctx.fillStyle = index === 5 ? "#f3f5fa" : "#b9c6e5";
+      if (index < 3) {
+        const passed = [checks.precheck === "passed", conceptsPass(checks.concepts), checks.detectorPassed][index];
+        ctx.fillStyle = "#0c1810"; ctx.fillRect(padding - 20, y - 28, width - 2 * padding + 40, lines.length * lineHeight + 12);
+        ctx.fillStyle = passed ? "#54ff81" : "#ff9696"; ctx.fillRect(padding - 20, y - 28, 4, lines.length * lineHeight + 12);
+      }
+      ctx.fillStyle = index === sections.length - 1 ? "#dcffe5" : "#93b69e";
       lines.forEach(line => { ctx.fillText(line, padding, y); y += lineHeight; }); y += 28;
     });
-    ctx.fillStyle = "#aab7d2"; ctx.font = "22px Arial";
+    ctx.fillStyle = "#93b69e"; ctx.font = "22px Arial";
     ctx.fillText(`${PUBLIC_URL}  •  @10xCatDad`, padding, canvas.height - 58);
     canvas.toBlob(blob => { if (blob && alive) { url = URL.createObjectURL(blob); setDownload(url); } }, "image/png");
     return () => { alive = false; if (url) URL.revokeObjectURL(url); };
   }, [text, prompt, result, checks]);
   return <div className="share-result"><p>Share your result</p><div>
-    <a className="secondary-button" href={download || undefined} download="writing-captcha-result.png" aria-disabled={!download}>1. Save submission image</a>
-    <a className="secondary-button" href={intentUrl(result, checks)} target="_blank" rel="noopener noreferrer">2. Post on X ↗</a>
+    <a className="secondary-button" href={download || undefined} download="humansonly-result.png" aria-disabled={!download}>1. Save result image</a>
+    <a className="secondary-button" href={intentUrl(result)} target="_blank" rel="noopener noreferrer">2. Post on X ↗</a>
   </div><small>Attach the saved image in the composer. It includes your full story.</small></div>;
 }

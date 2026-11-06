@@ -8,7 +8,7 @@ const key = process.env.PANGRAM_API_KEY;
 if (!key) throw new Error('Set PANGRAM_API_KEY locally.');
 const rows = (await readFile(path, 'utf8')).split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as { id: string; label: 'human' | 'bot'; text: string });
 if (rows.length > limit) throw new Error(`Dataset contains ${rows.length} rows, exceeding the explicit ${limit}-check budget.`);
-if (rows.some(r => typeof r.id !== 'string' || !['human', 'bot'].includes(r.label) || typeof r.text !== 'string' || wordsIn(r.text).length < 180 || wordsIn(r.text).length > 240)) throw new Error('Every row needs an id, independently established human/bot label, and 180–240 words of text.');
+if (rows.some(r => typeof r.id !== 'string' || !['human', 'bot'].includes(r.label) || typeof r.text !== 'string' || wordsIn(r.text).length < 200 || wordsIn(r.text).length > 250)) throw new Error('Every row needs an id, independently established human/bot label, and 200–250 words of text.');
 const results: {id:string;label:string;status:string;version?:string;elapsedMs:number}[] = [];
 for (const row of rows) {
   const started = Date.now();

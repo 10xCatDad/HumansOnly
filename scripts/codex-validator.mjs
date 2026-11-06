@@ -9,11 +9,11 @@ import { VALIDATOR_INSTRUCTIONS, CONCEPT_SCHEMA, parseConcepts } from '../lib/va
 
 export class SubscriptionJudge {
   child; nextId = 1; pending = new Map();
-  constructor() {
+  constructor({ spawnProcess = spawn, fetcher = fetch } = {}) {
     // Only authentication RPCs are called. No thread or agent turn is started.
-    const env = { ...process.env };
-    for (const key of ['PANGRAM_API_KEY', 'VALIDATOR_TOKEN', 'ADMIN_TOKEN', 'RATE_LIMIT_SECRET']) delete env[key];
-    this.child = spawn(process.env.CODEX_BINARY || 'codex', ['app-server', '--listen', 'stdio://', '-c', 'cli_auth_credentials_store="file"'], { stdio: ['pipe', 'pipe', 'ignore'], env });
+    const env = Object.fromEntries(['HOME', 'PATH', 'CODEX_HOME', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'SYSTEMROOT'].filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
+    this.fetcher = fetcher;
+    this.child = spawnProcess(process.env.CODEX_BINARY || 'codex', ['app-server', '--listen', 'stdio://', '-c', 'cli_auth_credentials_store="file"'], { stdio: ['pipe', 'pipe', 'ignore'], shell: false, env });
     createInterface({ input: this.child.stdout }).on('line', line => {
       try {
         const message = JSON.parse(line), waiter = this.pending.get(message.id);
@@ -29,6 +29,8 @@ export class SubscriptionJudge {
   }
   fail() { for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(new Error('Codex authentication unavailable')); } this.pending.clear(); }
   rpc(method, params) {
+    // Never forward model output or visitor requests into Codex agent/tool RPCs.
+    if (!['initialize', 'account/read'].includes(method)) return Promise.reject(new Error('Only authentication RPCs are permitted'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Codex authentication timeout')); }, 20_000);
@@ -47,16 +49,17 @@ export class SubscriptionJudge {
     return auth.tokens;
   }
   async evaluate(prompt, story) {
-    if (typeof story !== 'string' || story.length > 8000 || !['setting', 'characters', 'conflict'].every(k => typeof prompt[k] === 'string' && prompt[k].length < 500)) throw new Error('Invalid job input');
+    if (typeof story !== 'string' || story.length > 8000 || !prompt || typeof prompt !== 'object' || !['setting', 'characters', 'conflict'].every(k => typeof prompt[k] === 'string' && prompt[k].length < 500)) throw new Error('Invalid job input');
+    const requirements = Object.fromEntries(['setting', 'characters', 'conflict'].map(key => [key, prompt[key]]));
     const deadline = AbortSignal.timeout(90_000);
     let response;
     for (let attempt = 0; attempt < 2; attempt++) {
       const auth = await this.credentials(attempt === 1);
-      response = await fetch('https://chatgpt.com/backend-api/codex/responses', {
+      response = await this.fetcher('https://chatgpt.com/backend-api/codex/responses', {
         method: 'POST', redirect: 'error', signal: deadline,
         headers: { authorization: `Bearer ${auth.access_token}`, 'ChatGPT-Account-Id': auth.account_id, 'Content-Type': 'application/json', accept: 'text/event-stream' },
         body: JSON.stringify({ model: process.env.VALIDATOR_MODEL || 'gpt-6-luna', instructions: VALIDATOR_INSTRUCTIONS,
-          input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ requirements: prompt, story }) }] }],
+          input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ requirements, story }) }] }],
           tools: [], tool_choice: 'none', store: false, stream: true, reasoning: { effort: 'low' },
           text: { format: { type: 'json_schema', name: 'story_requirements', strict: true, schema: CONCEPT_SCHEMA } } }),
       });
@@ -77,7 +80,11 @@ export class SubscriptionJudge {
           if (!line.startsWith('data: ') || line === 'data: [DONE]') continue;
           const event = JSON.parse(line.slice(6));
           if (['error', 'response.failed', 'response.incomplete'].includes(event.type)) throw new Error('Codex did not complete');
-          if (event.type === 'response.output_text.delta') output += event.delta;
+          if (/function_call|tool_call/.test(event.type || '') || event.item?.type && !['message', 'reasoning'].includes(event.item.type) || event.response?.output?.some(item => !['message', 'reasoning'].includes(item.type))) throw new Error('Tool output is not permitted');
+          if (event.type === 'response.output_text.delta') {
+            if (typeof event.delta !== 'string') throw new Error('Invalid validator output');
+            output += event.delta;
+          }
           if (output.length > 2000) throw new Error('Invalid validator output');
           if (event.type === 'response.completed') completed = true;
         }
@@ -89,6 +96,20 @@ export class SubscriptionJudge {
   dispose() { this.child.kill(); this.fail(); }
 }
 
+export async function boundedJson(response, maxBytes = 262_144) {
+  if (!response.body || Number(response.headers.get('content-length')) > maxBytes) throw new Error('Invalid response size');
+  const reader = response.body.getReader(), chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read(); if (done) break;
+      size += value.byteLength; if (size > maxBytes) throw new Error('Invalid response size');
+      chunks.push(value);
+    }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
 async function main() {
   const origin = process.env.VALIDATOR_SITE_ORIGIN || 'https://captcha.10xcatdad.xyz';
   if (!/^https:\/\//.test(origin) && !/^http:\/\/127\.0\.0\.1:\d+$/.test(origin)) throw new Error('HTTPS origin required');
@@ -97,7 +118,7 @@ async function main() {
   const call = async (path, body = {}) => {
     const response = await fetch(origin + '/api/validator/' + path, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15_000), headers: { authorization: `Bearer ${process.env.VALIDATOR_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
     if (!response.ok) throw new Error('Worker endpoint unavailable');
-    return response.json();
+    return boundedJson(response, 16_384);
   };
   const heartbeat = setInterval(() => judge.credentials().then(() => call('heartbeat')).catch(() => {}), 30_000);
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => { clearInterval(heartbeat); judge.dispose(); process.exit(0); });
@@ -115,7 +136,7 @@ async function main() {
         for (let i = 0; i < 30; i++) {
           const response = await fetch(`https://text.external-api.pangram.com/task/${job.taskId}`, { headers: { 'x-api-key': process.env.PANGRAM_API_KEY }, redirect: 'error', signal: AbortSignal.timeout(12_000) });
           if (!response.ok) throw new Error('Detector unavailable');
-          task = await response.json();
+        task = await boundedJson(response);
           if (task.stage === 'STAGE_SUCCESS') break;
           if (task.stage === 'STAGE_FAILED') throw new Error('Detector failed');
           await delay(2000);

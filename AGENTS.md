@@ -13,3 +13,8 @@
 - Public GitHub commits use `10xCatDad <353330524+10xCatDad@users.noreply.github.com>`. Keep the private hosting repository's history and deployment identifiers out of that mirror.
 - The site brand is HumansOnly. Dark mode uses black surfaces and neon green accents; light mode keeps its neutral palette. Use icons for theme choices.
 - Keep detector branding out of prominent copy and share text. Retain the provider link in the footer and accurate provider disclosure in the privacy details.
+- Turnstile must succeed on the server before a new writing prompt is issued. Keep hostname/action validation and production test-key rejection; never rely only on the widget UI.
+- Results use overall Pass/Fail as the heading, followed by Cloudflare precheck, Codex story validation, and AI detection, in that order. Preserve this order in sharing.
+- Keep the local validator outbound-only and tool-free. Never feed submissions or model output into commands, executable code, file paths, or native agent/tool RPCs. Preserve strict parsing, request limits, and service hardening.
+- Main heading: "Bad Robot, Go Away (Challenge I)". Keep the HumansOnly brand.
+- Stories must contain 200–250 words. Keep X composer text under 280 characters; put the full story, prompt, and detailed check results in the downloadable result image.

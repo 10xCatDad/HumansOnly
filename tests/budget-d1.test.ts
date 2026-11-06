@@ -1,16 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { Miniflare } from "miniflare";
+import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { initializeBudget, reserveScan, budgetState } from "../lib/budget.ts";
 
 test("real D1 atomically enforces the lifetime budget and three-try quotas", async () => {
-  const mf = new Miniflare({
+  const mf = new Miniflare(convertV4MiniflareOptions({
     modules: true,
     script: "export default { fetch() { return new Response('test'); } };",
     compatibilityDate: "2026-05-15",
     d1Databases: ["BUDGET", "QUOTAS"],
-  });
+  }));
   try {
     const databases = await Promise.all(["BUDGET", "QUOTAS"].map(async name => {
       const db = await mf.getD1Database(name) as unknown as D1Database;

@@ -1,7 +1,7 @@
 import { billingWordBound, MAX_BILLING_WORDS } from "./budget.ts";
-export const POLICY_VERSION = "writing-concepts-v3";
-export const MIN_WORDS = 180;
-export const MAX_WORDS = 240;
+export const POLICY_VERSION = "writing-turnstile-v4";
+export const MIN_WORDS = 200;
+export const MAX_WORDS = 250;
 export const CHALLENGE_MS = 30 * 60_000;
 export const ACCESS_MS = 60 * 60_000;
 const settings = [

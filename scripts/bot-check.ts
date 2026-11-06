@@ -15,7 +15,7 @@ function generate(_prompt: StoryPrompt, strategy: number) {
   let story = base;
   if (strategy === 1) story = base.replace('I left', 'Okay, so I left').replace('She listened carefully,', '"Let me look," she said,').replace('We both laughed.', '"Not mine," I said. "But thanks."');
   if (strategy === 2) story = base.replaceAll('I thought', 'I figured').replace('That week had become a collection of small errands that never quite got finished.', 'Nothing got done that week. Seriously. I kept getting sidetracked.').replace('For a moment I stopped worrying about the time.', 'I forgot the time for a bit.');
-  if (wordsIn(story).length < 180 || wordsIn(story).length > 240) throw new Error('Baseline generator produced an invalid word count.');
+  if (wordsIn(story).length < 200 || wordsIn(story).length > 250) throw new Error('Baseline generator produced an invalid word count.');
   return story;
 }
 const trials: unknown[] = [];

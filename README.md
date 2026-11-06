@@ -1,10 +1,10 @@
 # HumansOnly
 
-A small experiment: write a 180–240-word story using three randomly assigned concepts. Every prompt includes cats.
+A small experiment: write a 200–250-word story using three randomly assigned concepts. Every prompt includes cats.
 
-**Try it:** https://captcha.10xcatdad.xyz · **Contact:** [@10xCatDad](https://x.com/10xCatDad)
+**Try it:** [captcha.10xcatdad.xyz](https://captcha.10xcatdad.xyz) · **Contact:** [@10xCatDad](https://x.com/10xCatDad)
 
-Pangram checks for AI writing. Codex checks the setting/time, characters, central conflict, and whether the response is a story. Passing both opens a protected page for an hour. Either check can make mistakes; passing does not prove someone is human.
+Cloudflare Turnstile checks the browser before issuing a writing prompt. Pangram checks for AI writing. Codex checks the setting/time, characters, central conflict, and whether the response is a story. Passing all three opens a protected page for an hour. The checks can make mistakes; passing does not prove someone is human.
 
 The public test has a $5 API budget and three tries per visitor. Results show both checks, overall totals, and an optional submission image with a prefilled X composer. The visitor chooses whether to post. Light, dark, and system themes are supported. Typing, pasting, and dictation work.
 
@@ -27,11 +27,11 @@ The Site uses Vinext, React, a Cloudflare Worker, and D1. Apply each migration o
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0003_perpetual_impossible_man.sql
 ```
 
-Configure `PANGRAM_API_KEY`, `RATE_LIMIT_SECRET`, `ADMIN_TOKEN`, and `VALIDATOR_TOKEN` in `.dev.vars` and the hosting environment. Generate independent random 32-byte values for the latter three. The public detector version is pinned in the server code.
+Configure `PANGRAM_API_KEY`, `RATE_LIMIT_SECRET`, `ADMIN_TOKEN`, `VALIDATOR_TOKEN`, `TURNSTILE_SITE_KEY`, and `TURNSTILE_SECRET_KEY` in `.dev.vars` and the hosting environment. Generate independent random 32-byte values for `RATE_LIMIT_SECRET`, `ADMIN_TOKEN`, and `VALIDATOR_TOKEN`. Create a Managed widget in Cloudflare Turnstile and allow the deployment hostnames. Use its supplied site key and secret; production rejects Cloudflare’s dummy test keys. The public detector version is pinned in the server code.
 
 ## Story validator
 
-The private worker uses the owner’s existing Codex subscription. No OpenAI API key is used. It retrieves the submitted text from its Pangram task and performs a bounded, tool-free check. It does not expose a Codex agent or account credentials to visitors.
+The private worker uses the owner’s existing Codex subscription. No OpenAI API key is used. It retrieves the submitted text from its Pangram task and performs a bounded, tool-free check. It does not expose a Codex agent or account credentials to visitors. Stories are data only: no tools, shell commands, dynamic code execution, or visitor-selected file access. Unexpected tool output is rejected.
 
 Run it in a second terminal for local development:
 
@@ -59,6 +59,6 @@ The optional `study:*` scripts are development tools. Detector and bot trials ca
 
 ## Data and publishing
 
-Stories go to Pangram and OpenAI. The app and private worker do not save story text or include it in logs. Drafts stay in the browser tab. Anonymous attempt metadata and aggregate results are retained for the experiment. Provider data handling follows [Pangram’s privacy policy](https://www.pangram.com/privacy-policy) and [OpenAI’s privacy policy](https://openai.com/policies/privacy-policy/).
+Cloudflare checks browser signals. Stories go to Pangram and OpenAI. The app and private worker do not save story text or include it in logs. Drafts stay in the browser tab. Anonymous attempt metadata and aggregate results are retained for the experiment. Provider data handling follows [Pangram’s privacy policy](https://www.pangram.com/privacy-policy) and [OpenAI’s privacy policy](https://openai.com/policies/privacy-policy/).
 
 Publish through the Sites source workflow so the pushed source, migrations, and build artifact match. Keep secrets in hosting settings and ignored local files. The GitHub repository is an anonymous source mirror; it does not contain the owner’s private deployment history.

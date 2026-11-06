@@ -13,6 +13,7 @@ const choices = [
 export function ThemeSwitch() {
   const [preference, setPreference] = useState<ThemePreference>("system");
   const [ready, setReady] = useState(false);
+  /* eslint-disable react-hooks/set-state-in-effect -- Restore browser preferences after hydration without changing the server render. */
   useEffect(() => {
     try {
       const saved = localStorage.getItem(THEME_KEY);
@@ -20,6 +21,7 @@ export function ThemeSwitch() {
     } catch { /* Storage is optional. */ }
     setReady(true);
   }, []);
+  /* eslint-enable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!ready) return;
     const apply = () => {

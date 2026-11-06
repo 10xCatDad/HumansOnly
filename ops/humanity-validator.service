@@ -11,6 +11,24 @@ ExecStart=/usr/bin/env node --env-file=.dev.vars --experimental-strip-types scri
 Restart=on-failure
 RestartSec=10
 NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+# Native subscription sign-in needs to refresh its credential store.
+ReadWritePaths=%h/.codex
+# WSL DNS lives under /mnt/wsl; hide the Windows drive without hiding DNS.
+InaccessiblePaths=-%h/.ssh -%h/.gnupg -/mnt/c
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+CapabilityBoundingSet=
+LimitCORE=0
+MemoryMax=768M
+TasksMax=96
 UMask=0077
 StandardOutput=journal
 StandardError=journal

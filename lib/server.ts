@@ -3,8 +3,9 @@ import { getResult, submitText, ProviderError, type Fetcher } from "./pangram.ts
 import { initializeBudget, budgetState, reserveScan, DEMO_ID, SCAN_RESERVATION_CENTS, PANGRAM_MODEL } from "./budget.ts";
 import { captureCompletedResults, overallStats } from "./stats.ts";
 import { parseConcepts, conceptsPass, type CheckDetails } from "./validation.ts";
+import { turnstileReady, verifyTurnstile, TurnstileUnavailable, type TurnstileEnv } from "./turnstile.ts";
 
-export type AppEnv = { DB?: D1Database; PANGRAM_API_KEY?: string; PANGRAM_MODEL?: string; RATE_LIMIT_SECRET?: string; ADMIN_TOKEN?: string; VALIDATOR_TOKEN?: string };
+export type AppEnv = TurnstileEnv & { DB?: D1Database; PANGRAM_API_KEY?: string; PANGRAM_MODEL?: string; RATE_LIMIT_SECRET?: string; ADMIN_TOKEN?: string; VALIDATOR_TOKEN?: string };
 type Session = { id: string; expires_at: number; grant_expires_at: number };
 type Challenge = { id: string; session_id: string; prompt: string; state: string; created_at: number; expires_at: number; submitted_at: number | null; task_id: string | null; next_poll_at: number; outcome: string | null; policy_version?: string; check_details?: string | null; validation_started_at?: number | null; validation_lease?: string | null };
 const HOUR = 60 * 60_000, DAY = 24 * HOUR, COOKIE = "humanity_session";
@@ -20,19 +21,19 @@ async function pseudonym(value: string, secret: string) {
   return Array.from(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value))), n => n.toString(16).padStart(2, "0")).join("");
 }
 function token() { return Array.from(crypto.getRandomValues(new Uint8Array(32)), n => n.toString(16).padStart(2, "0")).join(""); }
-function ready(env: AppEnv) { return !!(env.PANGRAM_API_KEY?.trim() && env.RATE_LIMIT_SECRET && env.VALIDATOR_TOKEN && env.DB); }
+function ready(env: AppEnv) { return turnstileReady(env) && !!(env.PANGRAM_API_KEY?.trim() && env.RATE_LIMIT_SECRET && env.VALIDATOR_TOKEN && env.DB); }
 async function availability(env: AppEnv, db: D1Database, now: number, sessionId?: string, network?: string) {
   const paused = await db.prepare("SELECT id FROM rate_buckets WHERE id = 'provider-cooldown' AND expires_at > ?").bind(now).first();
   const validator = await db.prepare("SELECT id FROM rate_buckets WHERE id = 'validator-heartbeat' AND expires_at > ?").bind(now).first();
   const budget = await budgetState(db, sessionId, network);
   const budgetExhausted = budget.remainingCents < SCAN_RESERVATION_CENTS;
   const attemptLimit = budget.attemptsRemaining === 0;
-  return { configured: ready(env) && !!validator && !paused && !budgetExhausted && !attemptLimit,
+  return { turnstileSiteKey: turnstileReady(env) ? env.TURNSTILE_SITE_KEY : null, configured: ready(env) && !!validator && !paused && !budgetExhausted && !attemptLimit,
     attemptsRemaining: budget.attemptsRemaining,
     closedReason: budgetExhausted ? "budget" : attemptLimit ? "attempts" : null,
     serviceMessage: budgetExhausted ? "The demo’s API budget has been used up."
       : attemptLimit ? "You’ve used all 3 tries."
-      : paused || !validator ? "Checks are temporarily unavailable. Please try again later." : undefined };
+      : paused || !validator || !turnstileReady(env) ? "Checks are temporarily unavailable. Please try again later." : undefined };
 }
 function enforceLimits(state: Awaited<ReturnType<typeof budgetState>>) {
   if (state.remainingCents < SCAN_RESERVATION_CENTS) throw new GateError(503, "budget_exhausted", "The demo’s API budget has been used up.");
@@ -83,7 +84,7 @@ function ipv6Prefix(ip: string) {
   return expanded.slice(0, 4).map(x => x.padStart(4, "0")).join(":");
 }
 function publicChallenge(c: Challenge) {
-  return { id: c.id, prompt: JSON.parse(c.prompt) as StoryPrompt, state: c.state, createdAt: c.created_at, expiresAt: c.expires_at, minWords: MIN_WORDS, maxWords: MAX_WORDS };
+  return { id: c.id, prompt: JSON.parse(c.prompt) as StoryPrompt, precheck: c.policy_version === POLICY_VERSION ? "passed" : "not-run", state: c.state, createdAt: c.created_at, expiresAt: c.expires_at, minWords: MIN_WORDS, maxWords: MAX_WORDS };
 }
 async function authorized(request: Request, secret?: string) {
   const supplied = request.headers.get("authorization")?.replace(/^Bearer /, "") ?? "";
@@ -95,7 +96,7 @@ async function finish(db: D1Database, c: Challenge, result: CheckDetails, versio
   const state = passed ? "passed" : "rejected";
   await db.batch([
     db.prepare("UPDATE sessions SET grant_expires_at = MAX(grant_expires_at, ?) WHERE id = ? AND ? = 'passed' AND EXISTS (SELECT 1 FROM challenges WHERE id = ? AND state = 'checking')").bind(now + ACCESS_MS, c.session_id, state, c.id),
-    db.prepare("UPDATE challenges SET state = ?, outcome = ?, provider_version = ?, check_details = ?, finished_at = ? WHERE id = ? AND state = 'checking'").bind(state, state, version, JSON.stringify(result), now, c.id),
+    db.prepare("UPDATE challenges SET state = ?, outcome = ?, provider_version = ?, check_details = ?, finished_at = ? WHERE id = ? AND state = 'checking'").bind(state, state, version, JSON.stringify({ ...result, precheck: c.policy_version === POLICY_VERSION ? "passed" : "not-run" }), now, c.id),
   ]);
   await captureCompletedResults(db);
 }
@@ -107,7 +108,7 @@ async function validatorApi(request: Request, env: AppEnv, db: D1Database, now: 
     await db.prepare("INSERT INTO rate_buckets (id, count, expires_at) VALUES ('validator-heartbeat', 1, ?) ON CONFLICT(id) DO UPDATE SET expires_at = excluded.expires_at").bind(now + 90_000).run();
     if (path.endsWith("heartbeat")) return json({ ok: true });
     const lease = token();
-    const job = await db.prepare("UPDATE challenges SET validation_started_at = ?, validation_lease = ? WHERE id = (SELECT c.id FROM challenges c JOIN demo_reservations r ON r.challenge_id = c.id WHERE c.state = 'checking' AND c.task_id IS NOT NULL AND c.policy_version = ? AND c.validation_started_at IS NULL AND c.submitted_at > ? ORDER BY c.submitted_at LIMIT 1) AND validation_started_at IS NULL RETURNING id, task_id, prompt").bind(now, lease, POLICY_VERSION, now - 300_000).first<{id:string;task_id:string;prompt:string}>();
+    const job = await db.prepare("UPDATE challenges SET validation_started_at = ?, validation_lease = ? WHERE id = (SELECT c.id FROM challenges c JOIN demo_reservations r ON r.challenge_id = c.id WHERE c.state = 'checking' AND c.task_id IS NOT NULL AND c.policy_version IN (?, 'writing-concepts-v3') AND c.validation_started_at IS NULL AND c.submitted_at > ? ORDER BY c.submitted_at LIMIT 1) AND validation_started_at IS NULL RETURNING id, task_id, prompt").bind(now, lease, POLICY_VERSION, now - 300_000).first<{id:string;task_id:string;prompt:string}>();
     return json({ job: job ? { id: job.id, taskId: job.task_id, prompt: JSON.parse(job.prompt), lease } : null });
   }
   if (path === "/api/validator/complete") {
@@ -147,7 +148,7 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
     await captureCompletedResults(db);
     if (path === "/api/status" && request.method === "GET") {
       const session = await sessionFor(request, db, now);
-      const current = session ? await db.prepare("SELECT * FROM challenges WHERE session_id = ? AND policy_version = ? AND ((state = 'open' AND expires_at > ?) OR state = 'checking') ORDER BY created_at DESC LIMIT 1").bind(session.id, POLICY_VERSION, now).first<Challenge>() : null;
+      const current = session ? await db.prepare("SELECT * FROM challenges WHERE session_id = ? AND ((policy_version = ? AND state = 'open' AND expires_at > ?) OR (state = 'checking' AND policy_version IN ('writing-turnstile-v4', 'writing-concepts-v3'))) ORDER BY created_at DESC LIMIT 1").bind(session.id, POLICY_VERSION, now).first<Challenge>() : null;
       return json({ ...await availability(env, db, now, session?.id, await networkKey(request, env)), overall: await overallStats(db), accessExpiresAt: session && session.grant_expires_at > now ? session.grant_expires_at : null, challenge: current ? publicChallenge(current) : null });
     }
     if (path === "/api/challenge" && request.method === "POST") {
@@ -155,8 +156,18 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
       let session = await sessionFor(request, db, now), cookie: string | null = null;
       enforceLimits(await budgetState(db, session?.id, network));
       if (session) {
-        const current = await db.prepare("SELECT * FROM challenges WHERE session_id = ? AND policy_version = ? AND ((state = 'open' AND expires_at > ?) OR state = 'checking') ORDER BY created_at DESC LIMIT 1").bind(session.id, POLICY_VERSION, now).first<Challenge>();
+        const current = await db.prepare("SELECT * FROM challenges WHERE session_id = ? AND ((policy_version = ? AND state = 'open' AND expires_at > ?) OR (state = 'checking' AND policy_version IN ('writing-turnstile-v4', 'writing-concepts-v3'))) ORDER BY created_at DESC LIMIT 1").bind(session.id, POLICY_VERSION, now).first<Challenge>();
         if (current) return json({ challenge: publicChallenge(current), ...await availability(env, db, now, session.id, network) });
+      }
+      if (!turnstileReady(env)) throw new GateError(503, "browser_check_unavailable", "The browser check is temporarily unavailable.");
+      const gateBody = await readBody(request);
+      await reserve(db, `browser-check:${network}`, 30, HOUR, now);
+      try {
+        const verified = await verifyTurnstile(gateBody.turnstileToken, env.TURNSTILE_SECRET_KEY!, new URL(request.url).hostname, request.headers.get("cf-connecting-ip"), options.fetcher);
+        if (!verified) throw new GateError(400, "browser_check", "The browser check failed or expired. Please retry it.");
+      } catch (error) {
+        if (error instanceof TurnstileUnavailable) throw new GateError(503, "browser_check_unavailable", "The browser check is temporarily unavailable. Please retry it.");
+        throw error;
       }
       await reserve(db, `issue-network:${network}`, 12, HOUR, now);
       if (!session) {

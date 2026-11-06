@@ -19,12 +19,22 @@ function fixture() {
   const sql = new DatabaseSync(":memory:");
   for (const file of readdirSync(new URL("../drizzle/", import.meta.url)).filter(f => f.endsWith(".sql")).sort()) sql.exec(readFileSync(new URL(`../drizzle/${file}`, import.meta.url), "utf8"));
   const db = { prepare: (q: string) => new Statement(sql, q), batch: async (statements: Statement[]) => { sql.exec("BEGIN"); try { const results = []; for (const s of statements) results.push(await s.run()); sql.exec("COMMIT"); return results; } catch (e) { sql.exec("ROLLBACK"); throw e; } } } as unknown as D1Database;
-  const env: AppEnv = { DB: db, PANGRAM_API_KEY: "unit-test-key", RATE_LIMIT_SECRET: "unit-test-rate-secret", ADMIN_TOKEN: "unit-test-admin", VALIDATOR_TOKEN: "unit-test-validator" };
+  const env: AppEnv = { DB: db, PANGRAM_API_KEY: "unit-test-key", RATE_LIMIT_SECRET: "unit-test-rate-secret", ADMIN_TOKEN: "unit-test-admin", VALIDATOR_TOKEN: "unit-test-validator", TURNSTILE_SITE_KEY: "unit-test-site", TURNSTILE_SECRET_KEY: "unit-test-turnstile" };
   sql.exec("INSERT INTO rate_buckets (id,count,expires_at) VALUES ('validator-heartbeat',1,9999999999999)");
   let now = 1_800_000_000_000, cookie = "", calls = 0;
   let providerResult: Record<string, unknown> = { stage: "STAGE_SUCCESS", prediction_short: "Human", fraction_human: 1, fraction_ai: 0, fraction_ai_assisted: 0, version: "test-fixture" };
   let failSubmit = false, submitStatus = 200;
+  const redeemed = new Set<string>();
+  let gateResult: Record<string,unknown> = {success:true,hostname:"localhost",action:"writing_prompt"};
+  let gateOffline = false;
   const fetcher: typeof fetch = async (_url, options) => {
+    if(String(_url).includes('challenges.cloudflare.com')) {
+      if(gateOffline) throw new Error('network unavailable');
+      const token=JSON.parse(options?.body as string).response;
+      if(redeemed.has(token)) return Response.json({success:false,'error-codes':['timeout-or-duplicate']});
+      if(gateResult.success)redeemed.add(token);
+      return Response.json(gateResult);
+    }
     if (options?.method === "POST") { calls++; if (failSubmit) throw new Error("network failure"); return submitStatus === 200 ? Response.json({ task_id: "test-task" }) : Response.json({ detail: "private provider diagnostic" }, { status: submitStatus }); }
     return Response.json(providerResult);
   };
@@ -33,7 +43,7 @@ function fixture() {
     if (response.headers.get("set-cookie")) cookie = response.headers.get("set-cookie")!.split(";")[0];
     return response;
   }
-  async function start() { const r = await request("/api/challenge", {}); assert.equal(r.status, 201); return (await r.json() as { challenge: { id: string; prompt: ReturnType<typeof createPrompt> } }).challenge; }
+  async function start() { const r = await request("/api/challenge", {turnstileToken:crypto.randomUUID()}); assert.equal(r.status, 201); return (await r.json() as { challenge: { id: string; prompt: ReturnType<typeof createPrompt> } }).challenge; }
   const writing = () => Array(200).fill("story").join(" ");
   async function complete(id: string, concepts = {setting:true,characters:true,conflict:true,story:true}) {
     const next = await request('/api/validator/next', {}, {authorization:'Bearer unit-test-validator'});
@@ -41,7 +51,7 @@ function fixture() {
     if (job) { assert.equal(job.id,id); return request('/api/validator/complete',{id,lease:job.lease,concepts},{authorization:'Bearer unit-test-validator'}); }
   }
   async function result(id: string) { await complete(id); return request(`/api/result?id=${id}`); }
-  return { env, sql, db, request, start, writing, complete, result, get cookie() { return cookie; }, set cookie(v) { cookie = v; }, get calls() { return calls; }, tick: (ms: number) => { now += ms; }, setResult: (v: Record<string, unknown>) => { providerResult = v; }, setSubmitStatus: (v: number) => { submitStatus = v; }, failSubmit: () => { failSubmit = true; } };
+  return { env, sql, db, request, start, writing, complete, result, setGateResult:(v:Record<string,unknown>)=>{gateResult=v;}, gateOffline:()=>{gateOffline=true;}, get cookie() { return cookie; }, set cookie(v) { cookie = v; }, get calls() { return calls; }, tick: (ms: number) => { now += ms; }, setResult: (v: Record<string, unknown>) => { providerResult = v; }, setSubmitStatus: (v: number) => { submitStatus = v; }, failSubmit: () => { failSubmit = true; } };
 }
 
 test("anonymous and unverified sessions cannot read protected content", async () => {
@@ -284,4 +294,59 @@ test('old word-based prompts cannot be resumed or submitted under the concept po
   assert.equal((await f.request('/api/submit',{challengeId:old.id,text:f.writing()})).status,410);
   assert.equal((await (await f.request('/api/status')).json() as {challenge:unknown}).challenge,null);
   assert.notEqual((await f.start()).id,old.id);assert.equal(f.calls,0);
+});
+
+test('Turnstile is required before a prompt or paid task exists',async()=>{
+  const f=fixture();
+  for(const token of [undefined,'','x'.repeat(2049)]) {
+    const response=await f.request('/api/challenge',{turnstileToken:token});assert.equal(response.status,400);
+  }
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM challenges').get()?.n,0);assert.equal(f.calls,0);
+  assert.equal((await budgetState(f.db)).reservedCents,0);
+  assert.equal((await f.request('/api/submit',{challengeId:'invented',text:f.writing()})).status,401);
+});
+test('Turnstile rejects wrong hostname, action, and failed provider decisions',async()=>{
+  for(const decision of [{success:false},{success:true,hostname:'elsewhere.example',action:'writing_prompt'},{success:true,hostname:'localhost',action:'different'},{success:'true',hostname:'localhost',action:'writing_prompt'}]) {
+    const f=fixture();f.setGateResult(decision);
+    assert.equal((await f.request('/api/challenge',{turnstileToken:'token'})).status,400);assert.equal(f.calls,0);
+    assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM challenges').get()?.n,0);
+  }
+});
+test('Turnstile outage and missing or dummy keys fail closed without charging',async()=>{
+  const offline=fixture();offline.gateOffline();assert.equal((await offline.request('/api/challenge',{turnstileToken:'token'})).status,503);assert.equal(offline.calls,0);
+  for(const value of ['', '1x00000000000000000000AA']) {
+    const f=fixture();f.env.TURNSTILE_SITE_KEY=value;
+    assert.equal((await f.request('/api/challenge',{turnstileToken:'token'})).status,503);
+    const status=await (await f.request('/api/status')).json() as {configured:boolean;turnstileSiteKey:unknown};
+    assert.equal(status.configured,false);assert.equal(status.turnstileSiteKey,null);assert.equal(f.calls,0);
+  }
+});
+test('a Turnstile token cannot issue a second prompt in another session',async()=>{
+  const f=fixture();assert.equal((await f.request('/api/challenge',{turnstileToken:'same-token'})).status,201);
+  f.cookie='';assert.equal((await f.request('/api/challenge',{turnstileToken:'same-token'})).status,400);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM challenges').get()?.n,1);assert.equal(f.calls,0);
+});
+test('pre-Turnstile paid checks can finish but unpaid old prompts cannot submit',async()=>{
+  const f=fixture(),c=await f.start();await f.request('/api/submit',{challengeId:c.id,text:f.writing()});
+  f.sql.prepare("UPDATE challenges SET policy_version='writing-concepts-v3' WHERE id=?").run(c.id);
+  const status=await (await f.request('/api/status')).json() as {challenge:{id:string}};assert.equal(status.challenge.id,c.id);
+  await f.complete(c.id);assert.equal((await f.request('/api/room')).status,200);
+  const oldResult=await (await f.request(`/api/result?id=${c.id}`)).json() as {checks:{precheck:string}};assert.equal(oldResult.checks.precheck,'not-run');
+  const next=await f.start();f.sql.prepare("UPDATE challenges SET policy_version='writing-concepts-v3' WHERE id=?").run(next.id);
+  assert.equal((await f.request('/api/submit',{challengeId:next.id,text:f.writing()})).status,410);assert.equal(f.calls,1);
+});
+
+test('result records the server-verified precheck',async()=>{
+  const f=fixture(), c=await f.start();
+  await f.request('/api/submit',{challengeId:c.id,text:f.writing()});
+  const result=await (await f.result(c.id)).json() as {checks:{precheck:string}};
+  assert.equal(result.checks.precheck,'passed');
+});
+
+test('story word limits are 200 through 250 without charging invalid attempts',async()=>{
+  const f=fixture(), c=await f.start();
+  for(const count of [199,251]) assert.equal((await f.request('/api/submit',{challengeId:c.id,text:Array(count).fill('story').join(' ')})).status,422);
+  assert.equal(f.calls,0);
+  assert.equal(inspectWriting(Array(200).fill('story').join(' ')).valid,true);
+  assert.equal(inspectWriting(Array(250).fill('story').join(' ')).valid,true);
 });

@@ -7,15 +7,16 @@ import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { ShareResult } from "@/components/ShareResult";
 import { ResultDetails } from "@/components/ResultDetails";
 import { SuccessFireworks } from "@/components/SuccessFireworks";
-import type { CheckDetails } from "@/lib/validation";
+import { BrowserGate } from "@/components/BrowserGate";
+import type { CheckDetails, PrecheckResult } from "@/lib/validation";
 
-type Challenge = { id: string; prompt: StoryPrompt; state: string; createdAt: number; expiresAt: number; minWords: number; maxWords: number };
-type Phase = "intro" | "writing" | "checking" | "passed" | "rejected" | "error" | "room" | "closed";
+type Challenge = { precheck?: PrecheckResult; id: string; prompt: StoryPrompt; state: string; createdAt: number; expiresAt: number; minWords: number; maxWords: number };
+type Phase = "intro" | "gate" | "writing" | "checking" | "passed" | "rejected" | "error" | "room" | "closed";
 type Room = { title: string; message: string; expiresAt: number; receipt: string };
 type Overall = { attempts: number; passed: number; failed: number; errors: number; unfinished: number };
 const DRAFT_KEY = "humanity-draft-v3";
 
-type ApiResult = { checks?: CheckDetails | null; configured: boolean; challenge: Challenge; state: Phase; accessExpiresAt: number | null; delayed?: boolean; serviceMessage?: string; attemptsRemaining?: number; closedReason?: "budget" | "attempts" | null; overall?: Overall };
+type ApiResult = { turnstileSiteKey?: string | null; checks?: CheckDetails | null; configured: boolean; challenge: Challenge; state: Phase; accessExpiresAt: number | null; delayed?: boolean; serviceMessage?: string; attemptsRemaining?: number; closedReason?: "budget" | "attempts" | null; overall?: Overall };
 class ApiError extends Error { status: number; code?: string; constructor(message: string, status: number, code?: string) { super(message); this.status = status; this.code = code; } }
 
 async function api<T = ApiResult>(path: string, body?: unknown): Promise<T> {
@@ -36,6 +37,8 @@ export default function Home() {
   const [serviceMessage, setServiceMessage] = useState("");
   const [attemptsRemaining, setAttemptsRemaining] = useState(3);
   const [closedReason, setClosedReason] = useState<"budget" | "attempts" | null>(null);
+  const [turnstileSiteKey, setTurnstileSiteKey] = useState<string | null>(null);
+  const [gateAttempt, setGateAttempt] = useState(0);
   const [checks, setChecks] = useState<CheckDetails | null>(null);
   const [automated, setAutomated] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -53,10 +56,11 @@ export default function Home() {
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Browser-only automation state is unavailable during SSR.
     if (navigator.webdriver) { setAutomated(true); setConfigured(false); setServiceMessage("Automated interaction is not allowed."); return; }
     api("/api/status").then(data => {
       if (!alive) return;
-      setConfigured(data.configured);
+      setConfigured(data.configured); setTurnstileSiteKey(data.turnstileSiteKey || null);
       if (data.overall) setOverall(data.overall);
       setServiceMessage(data.serviceMessage || "");
       setAttemptsRemaining(data.attemptsRemaining ?? 3); setClosedReason(data.closedReason || null);
@@ -115,7 +119,7 @@ export default function Home() {
   async function refreshAvailability() {
     try {
       const data = await api("/api/status");
-      setConfigured(data.configured); setServiceMessage(data.serviceMessage || "");
+      setConfigured(data.configured); setTurnstileSiteKey(data.turnstileSiteKey || null); setServiceMessage(data.serviceMessage || "");
       if (data.overall) setOverall(data.overall);
       setAttemptsRemaining(data.attemptsRemaining ?? 3); setClosedReason(data.closedReason || null);
     } catch { /* A failed status refresh never grants access or increases attempts. */ }
@@ -127,12 +131,13 @@ export default function Home() {
     catch (error) { setMessage((error as Error).message); }
     finally { setBusy(false); }
   }
-  async function start() {
-    if (navigator.webdriver) return;
+  async function start(turnstileToken?: string) {
+    if (navigator.webdriver || busy) return;
+    if (!turnstileToken) { setMessage(""); setGateAttempt(n => n + 1); setPhase("gate"); return; }
     setChecks(null);
     setBusy(true); setMessage(""); setReported(false); setFeedback(null);
     try {
-      const result = await api("/api/challenge", {});
+      const result = await api("/api/challenge", { turnstileToken });
       if (challenge?.id !== result.challenge.id) setText("");
       setChallenge(result.challenge); setConfigured(result.configured);
       setServiceMessage(result.serviceMessage || "");
@@ -184,8 +189,8 @@ export default function Home() {
       <main>
         <div className="main-grid">
           <section className="introduction">
-            <h1>Captcha Experiment</h1>
-            <p className="intro-copy">See if your favorite LLM can get past the defenses. Good luck!</p>
+            <h1>Bad Robot, Go Away <span className="title-context">(Challenge I)</span></h1>
+            <p className="intro-copy">See if your favorite LLM can get past the defenses. Good luck! (challenges II through V coming soon)</p>
             {overall && <div className="overall-stats" aria-label="Stats (Since Launch)"><span>Stats (Since Launch):</span><span><strong>{overall.attempts}</strong> {overall.attempts === 1 ? "attempt" : "attempts"}</span><span><strong>{overall.passed}</strong> passed</span><span><strong>{overall.failed}</strong> failed</span>{overall.errors > 0 && <span>{overall.errors} service {overall.errors === 1 ? "error" : "errors"}</span>}{overall.unfinished > 0 && <span>{overall.unfinished} unfinished</span>}</div>}
           </section>
           <section className={`challenge-card ${phase === "writing" ? "is-writing" : ""}`} id="challenge" aria-label="Writing challenge">
@@ -193,9 +198,10 @@ export default function Home() {
             {configured === false && !["passed", "room", "closed"].includes(phase) && <div className="setup-notice" role="status"><strong>Checks unavailable.</strong> {serviceMessage || "You can still view a prompt."}</div>}
             {phase === "intro" && <div className="welcome-content">
               <h2 ref={heading} tabIndex={-1}>Get a random prompt</h2>
-              <p>Write 180–240 words using the setting and time, characters, and conflict you’re given. There’s always a cat involved. Your story is checked for AI writing and the prompt requirements. You get 3 tries.</p>
-              <button className="primary-button" onClick={start} disabled={busy || automated || configured === null || !!closedReason}>{busy ? "Loading…" : "Get prompt"}<ArrowRight size={19} /></button>
+              <p>Write 200–250 words using the setting and time, characters, and conflict you’re given. There’s always a cat involved. Your story is checked for AI writing and the prompt requirements. You get 3 tries.</p>
+              <button className="primary-button" onClick={() => void start()} disabled={busy || automated || configured === null || !!closedReason}>{busy ? "Loading…" : "begin captcha attempt // prove your humanity"}<ArrowRight size={19} /></button>
             </div>}
+            {phase === "gate" && <div className="welcome-content browser-gate"><h2 ref={heading} tabIndex={-1}>Browser check</h2><p>Complete this check to get your writing prompt.</p>{turnstileSiteKey ? <BrowserGate key={gateAttempt} siteKey={turnstileSiteKey} onVerified={token => void start(token)} onError={setMessage} /> : <p role="status">The browser check is temporarily unavailable.</p>}{busy && <p role="status">Opening your prompt…</p>}<button className="text-button" onClick={() => { setMessage(""); setGateAttempt(n => n + 1); void refreshAvailability(); }} disabled={busy}>Retry browser check</button></div>}
             {phase === "closed" && <div className="result-content"><h2 ref={heading} tabIndex={-1}>{closedReason === "attempts" ? "No tries left" : "Demo budget reached"}</h2><p>{serviceMessage}</p></div>}
             {phase === "writing" && challenge && <form onSubmit={submit} className="writing-content">
               <div className="prompt-label"><span>PROMPT</span><span>{expired ? "Prompt expired" : `${attemptsRemaining} ${attemptsRemaining === 1 ? "try" : "tries"} left`}</span></div>
@@ -205,26 +211,26 @@ export default function Home() {
               {!writing.billingSafe && <p className="submission-note" role="status">Shorten the text or use fewer symbols.</p>}
               <label className="sr-only" htmlFor="story">Your short story</label>
               <div className="editor-wrap"><textarea ref={editor} id="story" value={text} onChange={e => setText(e.target.value)} placeholder="Write or paste your response…" maxLength={8000} aria-describedby="word-count writing-privacy" disabled={busy || expired} spellCheck /><div className="editor-bottom"><span>Draft saved in this tab</span><span id="word-count" className={writing.count > challenge.maxWords ? "over-limit" : writing.valid ? "count-ready" : ""}>{writing.count} <span>/ {challenge.minWords}–{challenge.maxWords} words</span></span></div></div>
-              {expired ? <button className="primary-button" type="button" onClick={start} disabled={busy}>New prompt <RotateCcw size={17} /></button> : <button className="primary-button" type="submit" disabled={!writing.valid || !configured || busy}>{busy ? "Submitting…" : closedReason ? "No checks available" : configured ? "Check writing" : "Checks unavailable"}<ArrowRight size={19} /></button>}
+              {expired ? <button className="primary-button" type="button" onClick={() => void start()} disabled={busy}>New prompt <RotateCcw size={17} /></button> : <button className="primary-button" type="submit" disabled={!writing.valid || !configured || busy}>{busy ? "Submitting…" : closedReason ? "No checks available" : configured ? "Check writing" : "Checks unavailable"}<ArrowRight size={19} /></button>}
               <p className="submission-note" id="writing-privacy">Your text goes to external verification services. This site does not save it.</p>
             </form>}
             {phase === "checking" && <div className="result-content" aria-live="polite"><h2 ref={heading} tabIndex={-1}>Checking…</h2><p>Checking AI writing and story requirements. This may take a minute.</p><div className="loading-track"><span /></div></div>}
-            {phase === "passed" && <div className="result-content">{checks && challenge && <SuccessFireworks key={challenge.id} />}<div className="result-icon passed"><ShieldCheck size={35} strokeWidth={1.3} /></div><h2 ref={heading} tabIndex={-1}>Passed</h2><p>Both checks passed.</p><button className="primary-button" onClick={enterRoom} disabled={busy}>{busy ? "Opening…" : "Open protected page"}<ArrowRight size={19} /></button><span className="quiet-label">Access expires at {accessExpiresAt ? new Date(accessExpiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "the end of this session"}.</span></div>}
+            {phase === "passed" && <div className="result-content">{checks && challenge && <SuccessFireworks key={challenge.id} />}<div className="result-icon passed"><ShieldCheck size={35} strokeWidth={1.3} /></div><h2 ref={heading} tabIndex={-1}>Pass</h2>{challenge && <ResultDetails checks={checks} precheck={challenge.precheck} />}<button className="primary-button" onClick={enterRoom} disabled={busy}>{busy ? "Opening…" : "Open protected page"}<ArrowRight size={19} /></button><span className="quiet-label">Access expires at {accessExpiresAt ? new Date(accessExpiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "the end of this session"}.</span></div>}
             {phase === "room" && room && <div className="result-content"><h2 ref={heading} tabIndex={-1}>Protected page</h2><p>{room.message}</p><div className="room-receipt"><Check size={15} /> Access confirmed</div></div>}
-            {(phase === "rejected" || phase === "error") && <div className="result-content"><h2 ref={heading} tabIndex={-1}>{phase === "rejected" ? "Did not pass" : "Check failed"}</h2><p>{phase === "rejected" ? "One or both checks did not pass. See the results below." : "The service could not complete the check. No access was granted."}</p><button className="primary-button" onClick={start} disabled={busy || !!closedReason}>New prompt <ArrowRight size={19} /></button>{phase === "rejected" && checks?.detectorPassed === false && <button className="text-button" onClick={report} disabled={busy || reported}>{reported ? "Report saved" : "I wrote this myself. Report a false positive."}</button>}<span className="quiet-label">{attemptsRemaining} {attemptsRemaining === 1 ? "try" : "tries"} left.</span></div>}
-            {checks && ["passed", "rejected", "room"].includes(phase) && <ResultDetails checks={checks} />}
+            {(phase === "rejected" || phase === "error") && <div className="result-content"><h2 ref={heading} tabIndex={-1}>{phase === "rejected" ? "Fail" : "Check failed"}</h2><p>{phase === "rejected" ? "" : "The service could not complete the check. No access was granted."}</p>{challenge && <ResultDetails checks={checks} precheck={challenge.precheck} />}<button className="primary-button" onClick={() => void start()} disabled={busy || !!closedReason}>New prompt <ArrowRight size={19} /></button>{phase === "rejected" && checks?.detectorPassed === false && <button className="text-button" onClick={report} disabled={busy || reported}>{reported ? "Report saved" : "I wrote this myself. Report a false positive."}</button>}<span className="quiet-label">{attemptsRemaining} {attemptsRemaining === 1 ? "try" : "tries"} left.</span></div>}
+            {checks && phase === "room" && <ResultDetails checks={checks} />}
             {challenge && ["passed", "rejected", "room"].includes(phase) && <div className="study-feedback"><p>{feedback ? "Feedback saved" : "How was it written? (optional)"}</p>{!feedback && <div><button onClick={() => giveFeedback("human")} disabled={busy}>By me</button><button onClick={() => giveFeedback("assisted")} disabled={busy}>AI-assisted</button><button onClick={() => giveFeedback("ai")} disabled={busy}>AI-generated</button></div>}</div>}
             {challenge && text && checks && ["passed", "rejected", "room"].includes(phase) && <ShareResult checks={checks} text={text} prompt={challenge.prompt} result={phase === "rejected" ? "rejected" : "passed"} />}
             {message && <div className="feedback-message" role="alert">{message}</div>}
           </section>
         </div>
         <section className="faq-section" id="how-it-works" aria-label="Details">
-          <details><summary>Data and privacy<span>+</span></summary><p>Text goes to Pangram for AI detection and OpenAI for the story check. This site does not save the text. Drafts stay in this tab. Prompt details, counts, timings, results, and feedback are removed after 30 days when a new prompt is issued. Anonymous attempt records and totals stay for this test. The session cookie lasts up to a year. See <a href="https://www.pangram.com/privacy-policy" target="_blank" rel="noreferrer">Pangram’s privacy policy</a> and <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noreferrer">OpenAI’s privacy policy</a> for their handling of submitted text.</p></details>
+          <details><summary>Data and privacy<span>+</span></summary><p>Cloudflare Turnstile checks browser signals before issuing a prompt. Text goes to Pangram for AI detection and OpenAI for the story check. This site does not save the text. Drafts stay in this tab. Prompt details, counts, timings, results, and feedback are removed after 30 days when a new prompt is issued. Anonymous attempt records and totals stay for this test. The session cookie lasts up to a year. See <a href="https://www.pangram.com/privacy-policy" target="_blank" rel="noreferrer">Pangram’s privacy policy</a> and <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noreferrer">OpenAI’s privacy policy</a> for their handling of submitted text. See <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noreferrer">Cloudflare’s privacy policy</a> for the browser check.</p></details>
           <details><summary>What does a pass mean?<span>+</span></summary><p>The text was classified as human-written and met the story requirements. Either check can be wrong. A pass does not prove you are human. Access lasts one hour.</p></details>
           <details><summary>Writing options<span>+</span></summary><p>Type, paste, or dictate. Prompts are in English and expire after 30 minutes. There is no alternate verification method in this demo.</p></details>
         </section>
       </main>
-      <footer className="site-footer"><a href="https://github.com/10xCatDad/CaptchaExperiments" target="_blank" rel="noreferrer">GitHub <ArrowUpRight size={13} /></a><a href="https://x.com/10xCatDad" target="_blank" rel="noreferrer">@10xCatDad <ArrowUpRight size={13} /></a><a href="https://www.pangram.com" target="_blank" rel="noreferrer">Pangram <ArrowUpRight size={13} /></a></footer>
+      <footer className="site-footer"><a href="https://github.com/10xCatDad/HumansOnly" target="_blank" rel="noreferrer">GitHub <ArrowUpRight size={13} /></a><a href="https://x.com/10xCatDad" target="_blank" rel="noreferrer">@10xCatDad <ArrowUpRight size={13} /></a><a href="https://www.pangram.com" target="_blank" rel="noreferrer">Pangram <ArrowUpRight size={13} /></a></footer>
     </div>
   );
 }

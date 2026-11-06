@@ -3,12 +3,12 @@ import "./globals.css";
 import { themeScript } from "@/lib/theme";
 
 export const metadata: Metadata = {
-  title: "HumansOnly | Captcha Experiment",
-  description: "See if your favorite LLM can get past the defenses. Good luck!",
+  title: "Bad Robot, Go Away (Challenge I) | HumansOnly",
+  description: "See if your favorite LLM can get past the defenses. Good luck! (challenges II through V coming soon)",
   metadataBase: new URL("https://captcha.10xcatdad.xyz"),
   alternates: { canonical: "https://captcha.10xcatdad.xyz/" },
-  openGraph: { type: "website", title: "HumansOnly | Captcha Experiment", description: "See if your favorite LLM can get past the defenses. Good luck!", images: [{ url: "/social-card.png", width: 1200, height: 630, alt: "HumansOnly: Captcha Experiment" }] },
-  twitter: { card: "summary_large_image", title: "HumansOnly | Captcha Experiment", description: "See if your favorite LLM can get past the defenses. Good luck!", images: ["/social-card.png"] },
+  openGraph: { type: "website", title: "Bad Robot, Go Away (Challenge I) | HumansOnly", description: "See if your favorite LLM can get past the defenses. Good luck! (challenges II through V coming soon)", images: [{ url: "/social-card.png", width: 1200, height: 630, alt: "HumansOnly: Bad Robot, Go Away (Challenge I)" }] },
+  twitter: { card: "summary_large_image", title: "Bad Robot, Go Away (Challenge I) | HumansOnly", description: "See if your favorite LLM can get past the defenses. Good luck! (challenges II through V coming soon)", images: ["/social-card.png"] },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

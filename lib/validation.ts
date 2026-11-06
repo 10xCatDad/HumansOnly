@@ -1,6 +1,7 @@
 export type ConceptResult = { setting: boolean; characters: boolean; conflict: boolean; story: boolean };
 export type PangramScore = { human: number; ai: number; assisted: number };
-export type CheckDetails = { pangram: PangramScore; detectorPassed: boolean; concepts: ConceptResult };
+export type PrecheckResult = "passed" | "not-run";
+export type CheckDetails = { precheck?: PrecheckResult; pangram: PangramScore; detectorPassed: boolean; concepts: ConceptResult };
 export const CONCEPT_KEYS = ["setting", "characters", "conflict", "story"] as const;
 export function parseConcepts(value: unknown): ConceptResult {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== 4 || CONCEPT_KEYS.some(k => typeof (value as ConceptResult)[k] !== "boolean")) throw new Error("Invalid concept result");
