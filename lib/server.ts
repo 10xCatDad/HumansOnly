@@ -1,5 +1,5 @@
 import { ACCESS_MS, CHALLENGE_MS, createPrompt, inspectWriting, MAX_WORDS, MIN_WORDS, POLICY_VERSION, type StoryPrompt } from "./challenge.ts";
-import { getResult, submitText, ProviderError, type Fetcher } from "./pangram.ts";
+import { getResult, getBreakdown, submitText, ProviderError, type Fetcher } from "./pangram.ts";
 import { initializeBudget, budgetState, reserveScan, DEMO_ID, SCAN_RESERVATION_CENTS, PANGRAM_MODEL } from "./budget.ts";
 import { captureCompletedResults, overallStats } from "./stats.ts";
 import { serviceDiagnostics } from "./diagnostics.ts";
@@ -167,6 +167,30 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
     if (path.startsWith("/api/validator/")) return await validatorApi(request, env, db, now, options.fetcher);
     if (path === "/api/result-image") return await shareResultImage(request, db, env, (await sessionFor(request, db, now))?.id, now, options.fetcher);
     assertOrigin(request);
+    if (path === "/api/diagnostics/pangram") {
+      if (request.method !== "GET") throw new GateError(405, "method", "Use GET.");
+      const session = await sessionFor(request, db, now);
+      if (!session) throw new GateError(401, "session", "Your session has expired. Please start again.");
+      const unlocked = await db.prepare("SELECT id FROM rate_buckets WHERE id = ? AND expires_at > ?").bind(`demo-unlimited:${session.id}`, now).first();
+      if (!unlocked) throw new GateError(403, "diagnostics_locked", "Unlock diagnostics to view this report.");
+      const c = await getChallenge(db, new URL(request.url).searchParams.get("id"), session);
+      if (!["passed", "rejected", "error"].includes(c.state)) throw new GateError(409, "unfinished", "This attempt has not finished yet.");
+      if (!c.task_id) throw new GateError(404, "no_report", "No Pangram report is available for this attempt.");
+      if (!env.PANGRAM_API_KEY?.trim()) throw new GateError(503, "unavailable", "Pangram details are temporarily unavailable.");
+      try { await reserve(db, `pangram-details:${session.id}`, 30, HOUR, now); }
+      catch (error) {
+        if (error instanceof GateError && error.status === 429) throw new GateError(429, "rate_limit", "Too many report requests. Try again later.", error.retryAfter);
+        throw error;
+      }
+      // Retrieve this session's existing task only. No scans, verdict changes or text storage.
+      try {
+        const breakdown = await getBreakdown(c.task_id, env.PANGRAM_API_KEY, options.fetcher);
+        if (!breakdown) return json({ code: "pending", message: "Pangram has not finished this report yet. Try refreshing later." }, 409);
+        return json({ breakdown });
+      } catch {
+        throw new GateError(503, "report_unavailable", "This report could not be retrieved. Try again later; older reports may no longer be available.");
+      }
+    }
     if (["/api/challenge", "/api/submit"].includes(path) && /HeadlessChrome|Playwright|Puppeteer|Selenium|GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-User|anthropic-ai|PerplexityBot|Google-Extended|Bytespider|CCBot/i.test(request.headers.get("user-agent") || "")) throw new GateError(403, "automation", "Automated interaction is not allowed.");
     await db.prepare("UPDATE challenges SET state = 'error', outcome = 'validation_timeout', finished_at = ? WHERE state = 'checking' AND submitted_at < ?").bind(now, now - 300_000).run();
     await initializeBudget(db, now);

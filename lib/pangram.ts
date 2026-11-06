@@ -1,17 +1,33 @@
 import type { PangramScore } from "./validation.ts";
+import { parseBreakdown } from "./pangram-details.ts";
 const BASE = "https://text.external-api.pangram.com";
 export type Fetcher = typeof fetch;
 export class ProviderError extends Error {
   code: "unavailable" | "configuration" | "billing" | "invalid_response";
   constructor(code: "unavailable" | "configuration" | "billing" | "invalid_response") { super(code); this.code = code; }
 }
-async function request(path: string, key: string, init: RequestInit, fetcher: Fetcher) {
+async function request(path: string, key: string, init: RequestInit, fetcher: Fetcher, maxBytes?: number) {
   let response: Response;
   try {
     response = await fetcher(`${BASE}${path}`, { ...init, headers: { "Content-Type": "application/json", "x-api-key": key }, redirect: "manual", signal: AbortSignal.timeout(12_000) });
   } catch { throw new ProviderError("unavailable"); }
   if (!response.ok) throw new ProviderError(response.status === 402 ? "billing" : [401, 403].includes(response.status) ? "configuration" : "unavailable");
-  try { return await response.json() as Record<string, unknown>; } catch { throw new ProviderError("invalid_response"); }
+  try {
+    if (!maxBytes) return await response.json() as Record<string, unknown>;
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error();
+    const decoder = new TextDecoder(); let bytes = 0, text = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) { await reader.cancel(); throw new Error(); }
+      text += decoder.decode(value, { stream: true });
+    }
+    const result: unknown = JSON.parse(text + decoder.decode());
+    if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error();
+    return result as Record<string, unknown>;
+  } catch { throw new ProviderError("invalid_response"); }
 }
 export async function submitText(text: string, key: string, model: string, fetcher: Fetcher = fetch) {
   const result = await request("/task", key, { method: "POST", body: JSON.stringify({ text, model, public_dashboard_link: false }) }, fetcher);
@@ -33,4 +49,10 @@ export function interpretResult(result: Record<string, unknown>): { status: "pen
 }
 export async function getResult(taskId: string, key: string, fetcher: Fetcher = fetch) {
   return interpretResult(await request(`/task/${encodeURIComponent(taskId)}`, key, { method: "GET" }, fetcher));
+}
+export async function getBreakdown(taskId: string, key: string, fetcher: Fetcher = fetch) {
+  if (!/^[a-zA-Z0-9_-]{1,160}$/.test(taskId)) throw new ProviderError("invalid_response");
+  const result = await request(`/task/${encodeURIComponent(taskId)}`, key, { method: "GET" }, fetcher, 256_000);
+  const checked = interpretResult(result);
+  return checked.status === "pending" ? null : parseBreakdown(result, checked.score);
 }

@@ -24,7 +24,7 @@ function fixture() {
   sql.exec("INSERT INTO rate_buckets (id,count,expires_at) VALUES ('validator-heartbeat',1,9999999999999)");
   let now = 1_800_000_000_000, cookie = "", calls = 0;
   let providerResult: Record<string, unknown> = { stage: "STAGE_SUCCESS", prediction_short: "Human", fraction_human: 1, fraction_ai: 0, fraction_ai_assisted: 0, version: "test-fixture" };
-  let failSubmit = false, submitStatus = 200;
+  let failSubmit = false, submitStatus = 200, reportReads = 0;
   const redeemed = new Set<string>();
   let gateResult: Record<string,unknown> = {success:true,hostname:"localhost",action:"writing_prompt"};
   let gateOffline = false;
@@ -37,6 +37,7 @@ function fixture() {
       return Response.json(gateResult);
     }
     if (options?.method === "POST") { calls++; if (failSubmit) throw new Error("network failure"); return submitStatus === 200 ? Response.json({ task_id: "test-task" }) : Response.json({ detail: "private provider diagnostic" }, { status: submitStatus }); }
+    reportReads++;
     return Response.json(providerResult);
   };
   async function request(path: string, body?: unknown, extra: Record<string, string> = {}) {
@@ -52,7 +53,7 @@ function fixture() {
     if (job) { assert.equal(job.id,id); return request('/api/validator/complete',{id,lease:job.lease,concepts},{authorization:'Bearer unit-test-validator'}); }
   }
   async function result(id: string) { await complete(id); return request(`/api/result?id=${id}`); }
-  return { env, sql, db, request, start, writing, complete, result, setGateResult:(v:Record<string,unknown>)=>{gateResult=v;}, gateOffline:()=>{gateOffline=true;}, get cookie() { return cookie; }, set cookie(v) { cookie = v; }, get calls() { return calls; }, tick: (ms: number) => { now += ms; }, setResult: (v: Record<string, unknown>) => { providerResult = v; }, setSubmitStatus: (v: number) => { submitStatus = v; }, failSubmit: () => { failSubmit = true; } };
+  return { env, sql, db, request, start, writing, complete, result, setGateResult:(v:Record<string,unknown>)=>{gateResult=v;}, gateOffline:()=>{gateOffline=true;}, get cookie() { return cookie; }, set cookie(v) { cookie = v; }, get calls() { return calls; }, get reportReads() { return reportReads; }, tick: (ms: number) => { now += ms; }, setResult: (v: Record<string, unknown>) => { providerResult = v; }, setSubmitStatus: (v: number) => { submitStatus = v; }, failSubmit: () => { failSubmit = true; } };
 }
 
 test("anonymous and unverified sessions cannot read protected content", async () => {
@@ -471,6 +472,68 @@ test('diagnostics publish only aggregated allowlisted error reasons',async()=>{
   f.sql.prepare('DELETE FROM challenges').run();
   const cleared=await (await f.request('/api/diagnostics')).json() as typeof data;
   assert.equal(cleared.totalErrors,2);assert.equal(cleared.detailsUnavailable,2);assert.deepEqual(cleared.errors,[]);
+});
+
+test('Pangram details require an unlocked session and its own completed attempt', async () => {
+  const f = fixture();
+  assert.equal((await f.request('/api/diagnostics/pangram?id=unknown')).status, 401);
+  const c = await f.start(), owner = f.cookie;
+  assert.equal((await f.request(`/api/diagnostics/pangram?id=${c.id}`)).status, 403);
+  await f.request('/api/diagnostics/unlock', {code:'uuddlrlrba'});
+  assert.equal((await f.request(`/api/diagnostics/pangram?id=${c.id}`)).status, 409);
+  await f.request('/api/submit', {challengeId:c.id,text:f.writing()});
+  assert.equal((await f.request(`/api/diagnostics/pangram?id=${c.id}`)).status, 409);
+  await f.complete(c.id);
+  const reads = f.reportReads;
+  f.cookie = '';
+  await f.request('/api/diagnostics/unlock', {code:'uuddlrlrba'});
+  assert.equal((await f.request(`/api/diagnostics/pangram?id=${c.id}`)).status, 404);
+  assert.equal(f.reportReads, reads, 'unauthorized requests must not contact the provider');
+  f.cookie = owner;
+  f.sql.prepare("UPDATE rate_buckets SET expires_at = 1 WHERE id LIKE 'demo-unlimited:%'").run();
+  assert.equal((await f.request(`/api/diagnostics/pangram?id=${c.id}`)).status, 403);
+  await f.request('/api/diagnostics/unlock', {code:'uuddlrlrba'});
+  f.sql.prepare('UPDATE challenges SET task_id = NULL WHERE id = ?').run(c.id);
+  assert.equal((await f.request(`/api/diagnostics/pangram?id=${c.id}`)).status, 404);
+  assert.equal(f.reportReads, reads);
+});
+
+test('Pangram details are private, bounded reads that cannot change verdicts, spending or grants', async () => {
+  const f = fixture(), c = await f.start();
+  await f.request('/api/submit', {challengeId:c.id,text:f.writing()});
+  await f.complete(c.id, {setting:false,characters:true,conflict:true,story:true});
+  await f.request('/api/diagnostics/unlock', {code:'uuddlrlrba'});
+  f.setResult({stage:'STAGE_SUCCESS',version:'pangram-4.1',prediction_short:'Human',fraction_human:1,fraction_ai:0,fraction_ai_assisted:0,
+    task_id:'private-provider-id', secret:'private-provider-secret', windows:[{text:'Private cat passage.',label:'Human Written',confidence:'High',class_probabilities:[0.9,0.08,0.02]}]});
+  const snapshot = () => JSON.stringify(['challenges','sessions','demo_budget','demo_reservations','demo_results'].map(table => f.sql.prepare(`SELECT * FROM ${table}`).all()));
+  const before = snapshot(), reads = f.reportReads;
+  const response = await f.request(`/api/diagnostics/pangram?id=${c.id}`);
+  assert.equal(response.status, 200); assert.equal(response.headers.get('cache-control'), 'no-store, private');
+  const serialized = await response.text();
+  assert.match(serialized, /Private cat passage/);
+  for (const value of ['private-provider-id','private-provider-secret','unit-test-key','task_id','session_id']) assert.ok(!serialized.includes(value));
+  assert.equal(f.reportReads, reads + 1); assert.equal(f.calls, 1); assert.equal(snapshot(), before);
+  assert.ok(!before.includes('Private cat passage'));
+  assert.equal((await f.request('/api/room')).status, 403);
+  assert.ok(!(await (await f.request('/api/diagnostics')).text()).includes('Private cat passage'));
+  assert.ok(!(await (await f.request(`/api/result?id=${c.id}`)).text()).includes('Private cat passage'));
+  for (let i=1; i<30; i++) assert.equal((await f.request(`/api/diagnostics/pangram?id=${c.id}`)).status, 200);
+  const limited = await f.request(`/api/diagnostics/pangram?id=${c.id}`);
+  assert.equal(limited.status, 429); assert.ok(limited.headers.get('retry-after'));
+  assert.equal(f.reportReads, reads + 30); assert.equal(f.calls, 1);
+});
+
+test('unavailable Pangram details fail safely without resubmitting or affecting completed attempts', async () => {
+  const f = fixture(), c = await f.start();
+  await f.request('/api/submit', {challengeId:c.id,text:f.writing()}); await f.complete(c.id);
+  await f.request('/api/diagnostics/unlock', {code:'uuddlrlrba'});
+  f.setResult({stage:'STAGE_FAILED',message:'private provider error'});
+  const response = await f.request(`/api/diagnostics/pangram?id=${c.id}`);
+  assert.equal(response.status, 503); assert.ok(!(await response.text()).includes('private provider error'));
+  f.setResult({stage:'STAGE_RUNNING'});
+  assert.equal((await f.request(`/api/diagnostics/pangram?id=${c.id}`)).status, 409);
+  assert.equal((await f.request('/api/room')).status, 200);
+  assert.equal(f.calls, 1);
 });
 
 test('shortcut grants retries only to its server session and preserves verification gates',async()=>{

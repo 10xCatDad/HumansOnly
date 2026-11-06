@@ -4,7 +4,7 @@ test.beforeEach(async ({page}) => { await page.addInitScript(() => Object.define
 const prompt = { setting: 'A coastal village in 1920', characters: 'Two estranged siblings caring for a cat', conflict: 'A broken promise must be repaired before sunset.' };
 function challenge() { return { id:'browser-fixture',precheck:'passed',prompt,state:'open',createdAt:Date.now(),expiresAt:Date.now()+1800000,minWords:200,maxWords:250 }; }
 const story = ['library','umbrella','promise',...Array(197).fill('story')].join(' ');
-async function mockApi(page, {configured=true, outcome='passed', attemptsRemaining=3, closedReason=null, budgetDuringSubmit=false,gatePass=true}={}) {
+async function mockApi(page, {configured=true, outcome='passed', attemptsRemaining=3, closedReason=null, budgetDuringSubmit=false,gatePass=true,history=[]}={}) {
   let submitted=false,completed=false,unlocked=false; const submittedAt=Date.now()-10000;
   const checks={precheck:'passed',pangram:{human:outcome==='passed'?1:0.125,ai:outcome==='passed'?0:0.75,assisted:outcome==='passed'?0:0.125},detectorPassed:outcome==='passed',concepts:{setting:true,characters:true,conflict:true,story:true}};
   // Cloudflare and paid checks are explicit fixtures in this UI suite.
@@ -19,7 +19,7 @@ async function mockApi(page, {configured=true, outcome='passed', attemptsRemaini
     let data={};
     if(path==='/api/diagnostics/unlock'){unlocked=true;data={unlocked:true,unlimitedAttempts:true};}
     if(path==='/api/diagnostics')data={checkedAt:Date.now(),totalErrors:1,detailsUnavailable:0,services:{browserConfigured:true,detectorConfigured:true,validatorOnline:true,detectorPausedUntil:null},errors:[{code:'validation_timeout',description:'The combined verification did not finish within five minutes.',count:1,lastSeen:Date.now()-10000}]};
-    if(path==='/api/status')data={...availability,history:completed?[{id:'browser-fixture',state:outcome,submittedAt,precheck:'passed',checks:outcome==='error'?null:checks}]:[],accessExpiresAt:null,challenge:null,overall:{attempts:8,passed:3,failed:4,errors:1,unfinished:0}};
+    if(path==='/api/status')data={...availability,history:completed?[{id:'browser-fixture',state:outcome,submittedAt,precheck:'passed',checks:outcome==='error'?null:checks}]:history,accessExpiresAt:null,challenge:null,overall:{attempts:8,passed:3,failed:4,errors:1,unfinished:0}};
     if(path==='/api/challenge')data={...availability,challenge:challenge()};
     if(path==='/api/submit') {
       if(budgetDuringSubmit) {
@@ -36,6 +36,9 @@ async function mockApi(page, {configured=true, outcome='passed', attemptsRemaini
 }
 test('desktop page loads and protected API denies an anonymous browser',async({page,request})=>{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  // Keep UI readiness independent of the local validator heartbeat. The direct
+  // request below still exercises the real anonymous protected endpoint.
+  await mockApi(page);
   await page.goto('/');
   await expect(page.getByRole('heading',{level:1})).toContainText('Challenge I');
   await expect(page.getByRole('heading',{name:'GOAL // CAPTURE THE FLAG WITH AN LLM'})).toBeVisible();
@@ -242,6 +245,46 @@ test('Konami code reveals diagnostics after the footer and unlocks retries only 
   await page.getByRole('button',{name:'BEGIN ATTEMPT'}).click();
   for(const key of ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'])await page.keyboard.press(key);
   await expect(panel).toHaveCount(0);
+});
+
+test('Konami reports show private passage details, cache selection and handle unavailable older reports',async({page})=>{
+  const history=['latest','older'].map((id,index)=>({id,state:'rejected',submittedAt:Date.now()-10000*(index+1),precheck:'passed',checks:null}));
+  await mockApi(page,{history});
+  const reads=[];
+  const passage={text:'The cat waited beside the window.',label:'AI-Generated',confidence:'High',assistanceScore:0.83,humanized:false,humanizerScore:0.12,probabilities:{human:0.1,assisted:0.2,ai:0.7},start:0,end:32,words:6,tokens:8};
+  const absent={text:null,label:null,confidence:null,assistanceScore:null,humanized:null,humanizerScore:null,probabilities:null,start:null,end:null,words:null,tokens:null};
+  await page.route('**/api/diagnostics/pangram?*',async route=>{
+    const id=new URL(route.request().url()).searchParams.get('id');reads.push(id);
+    if(id==='older')return route.fulfill({status:503,json:{message:'This report could not be retrieved. Try again later; older reports may no longer be available.'}});
+    return route.fulfill({json:{breakdown:{version:'pangram-4.1',verdict:'Mixed',fractions:{human:0.5,assisted:0.2,ai:0.3},segments:{human:1,assisted:0,ai:1},passages:[passage,absent],truncated:false}}});
+  });
+  await page.setViewportSize({width:390,height:844});await page.emulateMedia({colorScheme:'dark'});await page.goto('/');
+  await expect(page.getByRole('region',{name:'Previous Results'}).getByRole('button',{name:/Attempt 2/})).toBeVisible();
+  const report=page.getByRole('region',{name:'PANGRAM // DETAILED BREAKDOWN'});
+  await expect(report).toHaveCount(0);expect(reads).toEqual([]);
+  for(const key of ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'])await page.keyboard.press(key);
+  await expect(report.getByText(passage.text)).toBeVisible();
+  const first=report.locator('.pangram-passage').first();
+  await expect(first).toContainText('High');await expect(first).toContainText('83%');await expect(first).toContainText('Humanizer detectedNo');
+  await expect(first.locator('.pangram-scores')).toHaveText('Human10%AI-assisted20%AI-generated70%');
+  await report.getByText('Passage 2 // Label not supplied').click();
+  await expect(report.locator('.pangram-passage').nth(1)).toContainText('Humanizer detectedNot supplied');
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  expect(await page.evaluate(()=>JSON.stringify(localStorage))).not.toContain(passage.text);
+  await report.screenshot({path:'outputs/pangram-breakdown-mobile.png'});
+  await report.getByLabel('Attempt',{exact:true}).selectOption('older');
+  await expect(report.getByRole('alert')).toContainText('older reports may no longer be available');
+  await expect(report.getByText(passage.text)).toHaveCount(0);
+  await report.getByLabel('Attempt',{exact:true}).selectOption('latest');
+  await expect(report.getByText(passage.text)).toBeVisible();expect(reads).toEqual(['latest','older']);
+  await report.getByRole('button',{name:'REFRESH REPORT'}).click();
+  await expect.poll(()=>reads.length).toBe(3);
+  await expect(report.getByText(passage.text)).toBeVisible();
+  await page.setViewportSize({width:1280,height:1000});await page.emulateMedia({colorScheme:'light'});
+  await report.screenshot({path:'outputs/pangram-breakdown-desktop.png'});
+  await page.getByRole('button',{name:'Hide diagnostics'}).click();await expect(report).toHaveCount(0);
+  for(const key of ['ArrowUp','ArrowUp','ArrowDown','ArrowDown','ArrowLeft','ArrowRight','ArrowLeft','ArrowRight','b','a'])await page.keyboard.press(key);
+  await expect(report.getByText(passage.text)).toBeVisible();expect(reads).toEqual(['latest','older','latest','latest']);
 });
 
 test('normal 225-word dialogue can be submitted without a symbol warning',async({page})=>{
