@@ -1,0 +1,12 @@
+import { writeFile, mkdir } from 'node:fs/promises';
+const origin = process.argv.find(v => v.startsWith('--origin='))?.slice(9) || 'http://localhost:5188';
+if (!process.env.ADMIN_TOKEN) throw new Error('Set ADMIN_TOKEN in .dev.vars or the environment.');
+const r = await fetch(new URL('/api/admin/metrics', origin), { headers: { Authorization: `Bearer ${process.env.ADMIN_TOKEN}` }, redirect: 'manual', signal: AbortSignal.timeout(15000) });
+if (!r.ok) throw new Error(`Metrics request failed (${r.status}). Private Sites also require their platform sign-in.`);
+const data = await r.json();
+const times = data.samples.map(s => s.writing_ms).filter(v => typeof v === 'number').sort((a,b) => a-b);
+const median = times.length ? times.length % 2 ? times[(times.length-1)/2] : (times[times.length/2-1]+times[times.length/2])/2 : null;
+const report = { generatedAt: new Date().toISOString(), origin, ...data, medianWritingSeconds: median === null ? null : median / 1000, warning: 'Pass rate is not accuracy. False-rejection and bot-admission rates need independently labeled trials.' };
+await mkdir('outputs', { recursive: true });
+await writeFile('outputs/study-report.json', JSON.stringify(report, null, 2)+'\n');
+console.log(JSON.stringify({ summary: data.summary, overall: data.overall, budget: data.budget, feedback: data.feedback, medianWritingSeconds: report.medianWritingSeconds, output: 'outputs/study-report.json' }, null, 2));

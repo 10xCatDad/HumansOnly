@@ -1,0 +1,19 @@
+[Unit]
+Description=Writing CAPTCHA subscription story validator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/humanity/site
+# Install with the actual local Node executable in ExecStart.
+ExecStart=/usr/bin/env node --env-file=.dev.vars --experimental-strip-types scripts/codex-validator.mjs
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

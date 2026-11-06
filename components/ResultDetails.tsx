@@ -1,0 +1,4 @@
+import { conceptsPass, percent, type CheckDetails } from "@/lib/validation";
+export function ResultDetails({ checks }: { checks: CheckDetails }) {
+  return <div className="check-details" aria-label="Check results"><div><h3>Pangram</h3><p><strong>{percent(checks.pangram.ai)} AI</strong><span>{percent(checks.pangram.assisted)} AI-assisted</span><span>{percent(checks.pangram.human)} human</span></p><small>Share of text classified in each category.</small></div><div><h3>Codex story check <span>{conceptsPass(checks.concepts) ? "Passed" : "Failed"}</span></h3><ul>{([['setting', 'Setting / time'], ['characters', 'Characters'], ['conflict', 'Conflict'], ['story', 'Coherent story']] as const).map(([key, label]) => <li key={key}><span aria-label={checks.concepts[key] ? "Met:" : "Missing:"}>{checks.concepts[key] ? "✓" : "✗"}</span> {label}</li>)}</ul></div></div>;
+}
