@@ -9,6 +9,9 @@ import { ResultDetails } from "@/components/ResultDetails";
 import { SuccessFireworks } from "@/components/SuccessFireworks";
 import { AttemptHistory } from "@/components/AttemptHistory";
 import { BrowserGate } from "@/components/BrowserGate";
+import { ServiceDiagnostics } from "@/components/ServiceDiagnostics";
+import { ResultDialog } from "@/components/ResultDialog";
+import { XIcon } from "@/components/XIcon";
 import type { CheckDetails, PrecheckResult, AttemptResult } from "@/lib/validation";
 
 type Challenge = { precheck?: PrecheckResult; id: string; prompt: StoryPrompt; state: string; createdAt: number; expiresAt: number; minWords: number; maxWords: number };
@@ -17,7 +20,7 @@ type Room = { title: string; message: string; expiresAt: number; receipt: string
 type Overall = { attempts: number; passed: number; failed: number; errors: number; unfinished: number };
 const DRAFT_KEY = "humanity-draft-v3";
 
-type ApiResult = { history?: AttemptResult[]; turnstileSiteKey?: string | null; checks?: CheckDetails | null; configured: boolean; challenge: Challenge; state: Phase; accessExpiresAt: number | null; delayed?: boolean; serviceMessage?: string; attemptsRemaining?: number; closedReason?: "budget" | "attempts" | null; overall?: Overall };
+type ApiResult = { history?: AttemptResult[]; turnstileSiteKey?: string | null; checks?: CheckDetails | null; configured: boolean; challenge: Challenge; state: Phase; accessExpiresAt: number | null; delayed?: boolean; serviceMessage?: string; unlimitedAttempts?: boolean; attemptsRemaining?: number | null; closedReason?: "budget" | "attempts" | null; overall?: Overall };
 class ApiError extends Error { status: number; code?: string; constructor(message: string, status: number, code?: string) { super(message); this.status = status; this.code = code; } }
 
 async function api<T = ApiResult>(path: string, body?: unknown): Promise<T> {
@@ -38,9 +41,11 @@ export default function Home() {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [serviceMessage, setServiceMessage] = useState("");
   const [attemptsRemaining, setAttemptsRemaining] = useState(3);
+  const [unlimitedAttempts, setUnlimitedAttempts] = useState(false);
   const [closedReason, setClosedReason] = useState<"budget" | "attempts" | null>(null);
   const [turnstileSiteKey, setTurnstileSiteKey] = useState<string | null>(null);
   const [gateAttempt, setGateAttempt] = useState(0);
+  const [resultOpen, setResultOpen] = useState(false);
   const [checks, setChecks] = useState<CheckDetails | null>(null);
   const [automated, setAutomated] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -65,7 +70,7 @@ export default function Home() {
       setHistory(data.history || []); setConfigured(data.configured); setTurnstileSiteKey(data.turnstileSiteKey || null);
       if (data.overall) setOverall(data.overall);
       setServiceMessage(data.serviceMessage || "");
-      setAttemptsRemaining(data.attemptsRemaining ?? 3); setClosedReason(data.closedReason || null);
+      setUnlimitedAttempts(data.unlimitedAttempts === true); setAttemptsRemaining(data.attemptsRemaining ?? 3); setClosedReason(data.closedReason || null);
       if (data.accessExpiresAt) { setAccessExpiresAt(data.accessExpiresAt); setPhase("passed"); return; }
       if (data.closedReason && !data.challenge) { setPhase("closed"); return; }
       if (data.challenge) {
@@ -105,7 +110,8 @@ export default function Home() {
         const result = await api(`/api/result?id=${encodeURIComponent(challenge!.id)}`);
         if (!alive) return;
         if (["passed", "rejected", "error"].includes(result.state)) {
-          setChecks(result.checks || null); setPhase(result.state); setAccessExpiresAt(result.accessExpiresAt || null); setMessage("");
+          setChecks(result.checks || null); setPhase(result.state);
+          if (result.checks && ["passed", "rejected"].includes(result.state)) setResultOpen(true); setAccessExpiresAt(result.accessExpiresAt || null); setMessage("");
           await refreshAvailability();
           try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* Optional storage. */ }
           return;
@@ -123,7 +129,8 @@ export default function Home() {
       const data = await api("/api/status");
       setHistory(data.history || []); setConfigured(data.configured); setTurnstileSiteKey(data.turnstileSiteKey || null); setServiceMessage(data.serviceMessage || "");
       if (data.overall) setOverall(data.overall);
-      setAttemptsRemaining(data.attemptsRemaining ?? 3); setClosedReason(data.closedReason || null);
+      setUnlimitedAttempts(data.unlimitedAttempts === true); setAttemptsRemaining(data.attemptsRemaining ?? 3); setClosedReason(data.closedReason || null);
+      if (!data.closedReason) setPhase(current => current === "closed" ? "intro" : current);
     } catch { /* A failed status refresh never grants access or increases attempts. */ }
   }
   async function giveFeedback(source: string) {
@@ -136,14 +143,14 @@ export default function Home() {
   async function start(turnstileToken?: string) {
     if (navigator.webdriver || busy) return;
     if (!turnstileToken) { setMessage(""); setGateAttempt(n => n + 1); setPhase("gate"); return; }
-    setChecks(null);
+    setChecks(null); setResultOpen(false);
     setBusy(true); setMessage(""); setReported(false); setFeedback(null);
     try {
       const result = await api("/api/challenge", { turnstileToken });
       if (challenge?.id !== result.challenge.id) setText("");
       setChallenge(result.challenge); setConfigured(result.configured);
       setServiceMessage(result.serviceMessage || "");
-      setAttemptsRemaining(result.attemptsRemaining ?? 3); setClosedReason(result.closedReason || null);
+      setUnlimitedAttempts(result.unlimitedAttempts === true); setAttemptsRemaining(result.attemptsRemaining ?? 3); setClosedReason(result.closedReason || null);
       setPhase(result.challenge.state === "checking" ? "checking" : "writing");
     } catch (error) {
       setMessage((error as Error).message);
@@ -158,7 +165,7 @@ export default function Home() {
     try {
       const result = await api("/api/submit", { challengeId: challenge.id, text });
       setPhase(result.state === "checking" ? "checking" : result.state);
-      if (result.attemptsRemaining !== undefined) setAttemptsRemaining(result.attemptsRemaining);
+      if (result.attemptsRemaining !== undefined) setAttemptsRemaining(result.attemptsRemaining ?? 3);
     } catch (error) {
       setMessage((error as Error).message);
       if (error instanceof ApiError && ["budget_exhausted", "attempt_limit"].includes(error.code || "")) await refreshAvailability();
@@ -169,7 +176,7 @@ export default function Home() {
   }
   async function enterRoom() {
     setBusy(true); setMessage("");
-    try { setRoom(await api<Room>("/api/room")); setPhase("room"); }
+    try { setRoom(await api<Room>("/api/room")); setPhase("room"); setResultOpen(false); }
     catch (error) { setMessage((error as Error).message); }
     finally { setBusy(false); }
   }
@@ -191,22 +198,22 @@ export default function Home() {
       <main>
         <div className="main-grid">
           <section className="introduction">
-            <h1>Bad Robot, Go Away <span className="title-context">(Challenge I)</span></h1>
-            <p className="intro-copy">See if your favorite LLM can get past this captcha. Good luck! (challenges II through V coming soon)</p>
-            {overall && <div className="overall-stats" aria-label="Stats (Since Launch)"><span>Stats (Since Launch):</span><span><strong>{overall.attempts}</strong> {overall.attempts === 1 ? "attempt" : "attempts"}</span><span><strong>{overall.passed}</strong> passed</span><span><strong>{overall.failed}</strong> failed</span>{overall.errors > 0 && <span>{overall.errors} service {overall.errors === 1 ? "error" : "errors"}</span>}{overall.unfinished > 0 && <span>{overall.unfinished} unfinished</span>}</div>}
+            <h1>Bad Robot, Go Away <span className="title-context">// Challenge I</span></h1>
+            <p className="intro-copy">A capture-the-flag challenge for you and your favorite AI. Beat the captcha to reach the protected page. (Challenges II through V coming soon.)</p>
+            {overall && <div className="overall-stats" aria-label="Leaderboard info"><span>LEADERBOARD INFO //</span><span><strong>{overall.attempts}</strong> {overall.attempts === 1 ? "attempt" : "attempts"}</span><span><strong>{overall.passed}</strong> passed</span><span><strong>{overall.failed}</strong> failed</span>{overall.unfinished > 0 && <span>{overall.unfinished} unfinished</span>}</div>}
           </section>
           <section className={`challenge-card ${phase === "writing" ? "is-writing" : ""}`} id="challenge" aria-label="Writing challenge">
-            <div className="card-topline"><span><span className={`status-dot ${phase === "passed" || phase === "room" ? "success" : ""}`} />{phase === "passed" || phase === "room" ? "ACCESS GRANTED" : "WRITING CHECK"}</span><span className="attempts-remaining" aria-label="Attempts remaining" aria-live="polite"><strong>{configured === null ? "…" : attemptsRemaining}<small> / 3</small></strong><span>attempts left</span></span></div>
+            <div className="card-topline"><span><span className={`status-dot ${phase === "passed" || phase === "room" ? "success" : ""}`} />{phase === "passed" || phase === "room" ? "ACCESS GRANTED" : "CHALLENGE I // CAPTCHA"}</span><span className="attempts-remaining" aria-label="Attempts remaining" aria-live="polite"><strong>{configured === null ? "…" : unlimitedAttempts ? "∞" : attemptsRemaining}{!unlimitedAttempts && <small> / 3</small>}</strong><span>{unlimitedAttempts ? "unlimited tries" : "attempts left"}</span></span></div>
             {configured === false && !["passed", "room", "closed"].includes(phase) && <div className="setup-notice" role="status"><strong>Checks unavailable.</strong> {serviceMessage || "You can still view a prompt."}</div>}
             {phase === "intro" && <div className="welcome-content">
-              <h2 ref={heading} tabIndex={-1}>How this captcha works</h2>
-              <p>Complete the browser check, then write a 200–250 word story using your random setting/time, characters, and conflict. There’s always a cat. Pass the AI-writing and story checks to unlock the protected page. You get 3 tries.</p>
+              <h2 ref={heading} tabIndex={-1}>How to play // the captcha</h2>
+              <p>Clear the browser check, then write or generate a 200–250 word story using the assigned setting/time, characters, and conflict. There’s always a cat. Pass every check to reach the protected page. {unlimitedAttempts ? "Unlimited retries unlocked." : "You get 3 tries."}</p>
               <button className="primary-button" onClick={() => void start()} disabled={busy || automated || configured === null || !!closedReason}><span>{busy ? "LOADING…" : "BEGIN CAPTCHA ATTEMPT // PROVE YOUR HUMANITY"}</span><ArrowRight size={19} /></button>
             </div>}
             {phase === "gate" && <div className="welcome-content browser-gate"><h2 ref={heading} tabIndex={-1}>Browser check</h2><p>Complete this check to get your writing prompt.</p>{turnstileSiteKey ? <BrowserGate key={gateAttempt} siteKey={turnstileSiteKey} onVerified={token => void start(token)} onError={setMessage} /> : <p role="status">The browser check is temporarily unavailable.</p>}{busy && <p role="status">Opening your prompt…</p>}<button className="text-button" onClick={() => { setMessage(""); setGateAttempt(n => n + 1); void refreshAvailability(); }} disabled={busy}>Retry browser check</button></div>}
             {phase === "closed" && <div className="result-content"><h2 ref={heading} tabIndex={-1}>{closedReason === "attempts" ? "No tries left" : "Demo budget reached"}</h2><p>{serviceMessage}</p></div>}
             {phase === "writing" && challenge && <form onSubmit={submit} className="writing-content">
-              <div className="prompt-label"><span>PROMPT</span><span>{expired ? "Prompt expired" : `${attemptsRemaining} ${attemptsRemaining === 1 ? "try" : "tries"} left`}</span></div>
+              <div className="prompt-label"><span>PROMPT</span><span>{expired ? "Prompt expired" : unlimitedAttempts ? "Unlimited tries" : `${attemptsRemaining} ${attemptsRemaining === 1 ? "try" : "tries"} left`}</span></div>
               <div className="captcha-prompt"><h2 ref={heading} tabIndex={-1}>Write a short story</h2><p>Use all three requirements. {challenge.minWords}–{challenge.maxWords} words.</p>
                 <dl><div><dt>Setting / time</dt><dd>{challenge.prompt.setting}</dd></div><div><dt>Characters</dt><dd>{challenge.prompt.characters}</dd></div><div><dt>Conflict</dt><dd>{challenge.prompt.conflict}</dd></div></dl>
               </div>
@@ -214,26 +221,35 @@ export default function Home() {
               <label className="sr-only" htmlFor="story">Your short story</label>
               <div className="editor-wrap"><textarea ref={editor} id="story" value={text} onChange={e => setText(e.target.value)} placeholder="Write or paste your response…" maxLength={8000} aria-describedby="word-count writing-privacy" disabled={busy || expired} spellCheck /><div className="editor-bottom"><span>Draft saved in this tab</span><span id="word-count" className={writing.count > challenge.maxWords ? "over-limit" : writing.valid ? "count-ready" : ""}>{writing.count} <span>/ {challenge.minWords}–{challenge.maxWords} words</span></span></div></div>
               {expired ? <button className="primary-button" type="button" onClick={() => void start()} disabled={busy}>New prompt <RotateCcw size={17} /></button> : <button className="primary-button" type="submit" disabled={!writing.valid || !configured || busy}>{busy ? "Submitting…" : closedReason ? "No checks available" : configured ? "Check writing" : "Checks unavailable"}<ArrowRight size={19} /></button>}
-              <p className="submission-note" id="writing-privacy">Your text goes to external verification services. This site does not save it.</p>
+              <p className="submission-note" id="writing-privacy">Your text goes to external verification services. The server does not save it.</p>
             </form>}
             {phase === "checking" && <div className="result-content" aria-live="polite"><h2 ref={heading} tabIndex={-1}>Checking…</h2><p>Checking AI writing and story requirements. This may take a minute.</p><div className="loading-track"><span /></div></div>}
-            {phase === "passed" && <div className="result-content">{checks && challenge && <SuccessFireworks key={challenge.id} />}<div className="result-icon passed"><ShieldCheck size={35} strokeWidth={1.3} /></div><h2 ref={heading} tabIndex={-1}>Pass</h2>{challenge && <ResultDetails checks={checks} precheck={challenge.precheck} />}<button className="primary-button" onClick={enterRoom} disabled={busy}>{busy ? "Opening…" : "Open protected page"}<ArrowRight size={19} /></button><span className="quiet-label">Access expires at {accessExpiresAt ? new Date(accessExpiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "the end of this session"}.</span></div>}
-            {phase === "room" && room && <div className="result-content"><h2 ref={heading} tabIndex={-1}>Protected page</h2><p>{room.message}</p><div className="room-receipt"><Check size={15} /> Access confirmed</div></div>}
-            {(phase === "rejected" || phase === "error") && <div className="result-content"><h2 ref={heading} tabIndex={-1}>{phase === "rejected" ? "Fail" : "Check failed"}</h2><p>{phase === "rejected" ? "" : "The service could not complete the check. No access was granted."}</p>{challenge && <ResultDetails checks={checks} precheck={challenge.precheck} />}<button className="primary-button" onClick={() => void start()} disabled={busy || !!closedReason}>New prompt <ArrowRight size={19} /></button>{phase === "rejected" && checks?.detectorPassed === false && <button className="text-button" onClick={report} disabled={busy || reported}>{reported ? "Report saved" : "I wrote this myself. Report a false positive."}</button>}<span className="quiet-label">{attemptsRemaining} {attemptsRemaining === 1 ? "try" : "tries"} left.</span></div>}
+            {phase === "passed" && <div className="result-content">{checks && challenge && <SuccessFireworks key={challenge.id} />}<div className="result-icon passed"><ShieldCheck size={35} strokeWidth={1.3} /></div><h2 ref={heading} tabIndex={-1}>Pass</h2><p>Challenge I cleared. The protected page is yours to enter.</p>{challenge && <ResultDetails checks={checks} precheck={challenge.precheck} />}<button className="primary-button" onClick={enterRoom} disabled={busy}>{busy ? "Opening…" : "Open protected page"}<ArrowRight size={19} /></button><span className="quiet-label">Access expires at {accessExpiresAt ? new Date(accessExpiresAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "the end of this session"}.</span></div>}
+            {phase === "room" && room && <div className="result-content"><h2 ref={heading} tabIndex={-1}>Challenge I // cleared</h2><p>You reached the protected page. Share your result and challenge someone else.</p><div className="room-receipt"><Check size={15} /> Access confirmed</div></div>}
+            {(phase === "rejected" || phase === "error") && <div className="result-content"><h2 ref={heading} tabIndex={-1}>{phase === "rejected" ? "Fail" : "Check failed"}</h2><p>{phase === "rejected" ? "The captcha held. See which check stopped this attempt." : "The service could not complete the check. No access was granted."}</p>{challenge && <ResultDetails checks={checks} precheck={challenge.precheck} />}<button className="primary-button" onClick={() => void start()} disabled={busy || !!closedReason}>New prompt <ArrowRight size={19} /></button>{phase === "rejected" && checks?.detectorPassed === false && <button className="text-button" onClick={report} disabled={busy || reported}>{reported ? "Report saved" : "I wrote this myself. Report a false positive."}</button>}<span className="quiet-label">{unlimitedAttempts ? "Unlimited tries" : `${attemptsRemaining} ${attemptsRemaining === 1 ? "try" : "tries"} left.`}</span></div>}
             {checks && phase === "room" && <ResultDetails checks={checks} />}
-            {challenge && ["passed", "rejected", "room"].includes(phase) && <div className="study-feedback"><p>{feedback ? "Feedback saved" : "How was it written? (optional)"}</p>{!feedback && <div><button onClick={() => giveFeedback("human")} disabled={busy}>By me</button><button onClick={() => giveFeedback("assisted")} disabled={busy}>AI-assisted</button><button onClick={() => giveFeedback("ai")} disabled={busy}>AI-generated</button></div>}</div>}
-            {challenge && text && checks && ["passed", "rejected", "room"].includes(phase) && <ShareResult checks={checks} text={text} prompt={challenge.prompt} result={phase === "rejected" ? "rejected" : "passed"} />}
+
+            {challenge && text && checks && ["passed", "rejected", "room"].includes(phase) && <>
+              <button className="secondary-button view-result" onClick={() => setResultOpen(true)}>View result // share</button>
+              <ResultDialog open={resultOpen} result={phase === "rejected" ? "rejected" : "passed"} onClose={() => setResultOpen(false)}>
+                <ResultDetails checks={checks} precheck={challenge.precheck} />
+                <ShareResult id={challenge.id} attemptsRemaining={unlimitedAttempts ? null : attemptsRemaining} checks={checks} text={text} prompt={challenge.prompt} result={phase === "rejected" ? "rejected" : "passed"} />
+                <div className="study-feedback"><p>{feedback ? "Feedback saved" : "How was it written? (optional)"}</p>{!feedback && <div><button onClick={() => giveFeedback("human")} disabled={busy}>By me</button><button onClick={() => giveFeedback("assisted")} disabled={busy}>AI-assisted</button><button onClick={() => giveFeedback("ai")} disabled={busy}>AI-generated</button></div>}</div>
+                {phase === "passed" && <button className="secondary-button" onClick={enterRoom} disabled={busy}>Open protected page <ArrowRight size={16} /></button>}
+              </ResultDialog>
+            </>}
             {message && <div className="feedback-message" role="alert">{message}</div>}
           </section>
         </div>
-        {history && <AttemptHistory results={history} />}
+        {history && <AttemptHistory results={history} attemptsRemaining={unlimitedAttempts ? null : attemptsRemaining} />}
         <section className="faq-section" id="how-it-works" aria-label="Details">
-          <details><summary>Data and privacy<span>+</span></summary><p>Cloudflare Turnstile checks browser signals before issuing a prompt. Text goes to Pangram for AI detection and OpenAI for the story check. This site does not save the text. Drafts stay in this tab. Prompt details, timings, detailed check results, and feedback are removed after 30 days when a new prompt is issued. Anonymous attempt records and totals stay for this test. The session cookie lasts up to a year. See <a href="https://www.pangram.com/privacy-policy" target="_blank" rel="noreferrer">Pangram’s privacy policy</a> and <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noreferrer">OpenAI’s privacy policy</a> for their handling of submitted text. See <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noreferrer">Cloudflare’s privacy policy</a> for the browser check.</p></details>
+          <details><summary>Data and privacy<span>+</span></summary><p>Cloudflare Turnstile checks browser signals before issuing a prompt. Text goes to Pangram for AI detection and OpenAI for the story check. The server does not save the text. Drafts stay in this tab. Result images are saved in this browser so you can view and share them later. Clearing browser data removes them. Prompt details, timings, detailed check results, and feedback are removed after 30 days when a new prompt is issued. Anonymous attempt records and totals stay for this test. The session cookie lasts up to a year. See <a href="https://www.pangram.com/privacy-policy" target="_blank" rel="noreferrer">Pangram’s privacy policy</a> and <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noreferrer">OpenAI’s privacy policy</a> for their handling of submitted text. See <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noreferrer">Cloudflare’s privacy policy</a> for the browser check.</p></details>
           <details><summary>What does a pass mean?<span>+</span></summary><p>The text was classified as human-written and met the story requirements. Either check can be wrong. A pass does not prove you are human. Access lasts one hour.</p></details>
           <details><summary>Writing options<span>+</span></summary><p>Type, paste, or dictate. Prompts are in English and expire after 30 minutes. There is no alternate verification method in this demo.</p></details>
         </section>
       </main>
-      <footer className="site-footer"><a href="https://github.com/10xCatDad/HumansOnly" target="_blank" rel="noreferrer">GitHub <ArrowUpRight size={13} /></a><a href="https://x.com/10xCatDad" target="_blank" rel="noreferrer">@10xCatDad <ArrowUpRight size={13} /></a><a href="https://www.pangram.com" target="_blank" rel="noreferrer">Pangram <ArrowUpRight size={13} /></a></footer>
+      <footer className="site-footer"><a href="https://github.com/10xCatDad/HumansOnly" target="_blank" rel="noreferrer">GitHub <ArrowUpRight size={13} /></a><a href="https://x.com/10xCatDad" target="_blank" rel="noreferrer" aria-label="@10xCatDad on X"><XIcon /> @10xCatDad</a><a href="https://www.pangram.com" target="_blank" rel="noreferrer">Pangram <ArrowUpRight size={13} /></a></footer>
+      <ServiceDiagnostics onUnlocked={refreshAvailability} />
     </div>
   );
 }

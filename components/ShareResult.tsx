@@ -1,70 +1,78 @@
 "use client";
 import { useEffect, useState } from "react";
-import type { StoryPrompt } from "@/lib/challenge";
-import { conceptsPass, percent, type CheckDetails } from "@/lib/validation";
-import { intentUrl, PUBLIC_URL } from "@/lib/share";
+import { intentUrl, shareText } from "@/lib/share";
+import { renderResultImage, type ResultImageInput } from "@/lib/result-image";
+import { loadResultImage, saveResultImage, RESULT_IMAGE_SAVED } from "@/lib/result-images";
 
-type Props = { text: string; prompt: StoryPrompt; result: "passed" | "rejected"; checks: CheckDetails };
-export function ShareResult({ text, prompt, result, checks }: Props) {
-  const [download, setDownload] = useState<string | null>(null);
+type Props = ResultImageInput & { attemptsRemaining: number | null };
+export function ShareResult({ id, text, prompt, result, checks, precheck, attemptsRemaining }: Props) {
+  const [image, setImage] = useState<{ blob: Blob; url: string; hasStory: boolean } | null>(null);
+  const [error, setError] = useState(false);
+  const [retry, setRetry] = useState(0);
+  const [message, setMessage] = useState("");
   useEffect(() => {
-    let alive = true, url: string | undefined;
-    async function renderImage() {
-      await Promise.all([document.fonts.load('400 24px "Space Grotesk"'), document.fonts.load('700 38px "Space Grotesk"')]).catch(() => {});
+    let alive = true, currentUrl: string | undefined;
+    function display(blob: Blob, hasStory: boolean) {
       if (!alive) return;
-      const canvas = document.createElement("canvas"), ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      const width = 1080, padding = 64, lineHeight = 36;
-      ctx.font = '24px "Space Grotesk", Arial';
-      function wrap(value: string) {
-        const lines: string[] = [];
-        for (const paragraph of value.split(/\n/)) {
-          let line = "";
-          for (const word of paragraph.split(/\s+/)) {
-            if (!word) continue;
-            if (ctx!.measureText(`${line} ${word}`.trim()).width <= width - 2 * padding) { line = `${line} ${word}`.trim(); continue; }
-            if (line) lines.push(line); line = "";
-            for (const character of word) {
-              if (ctx!.measureText(line + character).width > width - 2 * padding) { lines.push(line); line = ""; }
-              line += character;
-            }
-          }
-          lines.push(line);
-        }
-        return lines;
-      }
-      const conceptSummary = `Story validation (Codex): ${conceptsPass(checks.concepts) ? "PASS" : "FAIL"}\nSetting ${checks.concepts.setting ? "yes" : "no"} · Characters ${checks.concepts.characters ? "yes" : "no"} · Conflict ${checks.concepts.conflict ? "yes" : "no"} · Coherent story ${checks.concepts.story ? "yes" : "no"}`;
-      const sections = [
-        `Cloudflare precheck: ${checks.precheck === "passed" ? "PASS" : "not run"}`,
-        conceptSummary,
-        `AI detection: ${checks.detectorPassed ? "PASS" : "FAIL"}\n${percent(checks.pangram.human)} human · ${percent(checks.pangram.ai)} AI · ${percent(checks.pangram.assisted)} AI-assisted\nShare of text classified in each category.`,
-        `Setting / time: ${prompt.setting}`, `Characters: ${prompt.characters}`, `Conflict: ${prompt.conflict}`, text,
-      ].map(wrap);
-      canvas.width = width;
-      canvas.height = 270 + sections.reduce((sum, lines) => sum + lines.length * lineHeight + 28, 0);
-      ctx.fillStyle = "#000000"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = result === "passed" ? "#54ff81" : "#ff9696"; ctx.font = '700 38px "Space Grotesk", Arial';
-      ctx.fillText(`HumansOnly: ${result === "passed" ? "PASS" : "FAIL"}`, padding, 86);
-      ctx.font = '24px "Space Grotesk", Arial';
-      let y = 142;
-      sections.forEach((lines, index) => {
-        if (index < 3) {
-          const passed = [checks.precheck === "passed", conceptsPass(checks.concepts), checks.detectorPassed][index];
-          ctx.fillStyle = "#0c1810"; ctx.fillRect(padding - 20, y - 28, width - 2 * padding + 40, lines.length * lineHeight + 12);
-          ctx.fillStyle = passed ? "#54ff81" : "#ff9696"; ctx.fillRect(padding - 20, y - 28, 4, lines.length * lineHeight + 12);
-        }
-        ctx.fillStyle = index === sections.length - 1 ? "#dcffe5" : "#93b69e";
-        lines.forEach(line => { ctx.fillText(line, padding, y); y += lineHeight; }); y += 28;
-      });
-      ctx.fillStyle = "#93b69e"; ctx.font = '22px "Space Grotesk", Arial';
-      ctx.fillText(`${PUBLIC_URL}  •  @10xCatDad`, padding, canvas.height - 58);
-      canvas.toBlob(blob => { if (blob && alive) { url = URL.createObjectURL(blob); setDownload(url); } }, "image/png");
+      if (currentUrl) URL.revokeObjectURL(currentUrl);
+      currentUrl = URL.createObjectURL(blob);
+      setImage({ blob, url: currentUrl, hasStory }); setError(false);
     }
-    void renderImage();
-    return () => { alive = false; if (url) URL.revokeObjectURL(url); };
-  }, [text, prompt, result, checks]);
-  return <div className="share-result"><p>Share your result</p><div>
-    <a className="secondary-button" href={download || undefined} download="humansonly-result.png" aria-disabled={!download}>1. Save result image</a>
-    <a className="secondary-button" href={intentUrl(result)} target="_blank" rel="noopener noreferrer">2. Post on X ↗</a>
-  </div><small>Attach the saved image in the composer. It includes your full story.</small></div>;
+    async function prepare() {
+      try {
+        let saved = await loadResultImage(id);
+        if (!saved || text && !saved.hasStory) {
+          const blob = await renderResultImage({ id, result, checks, precheck, text, prompt });
+          saved = await saveResultImage({ id, image: blob, hasStory: !!text, savedAt: Date.now(), version: 1 });
+        }
+        display(saved.image, saved.hasStory);
+      } catch { if (alive) setError(true); }
+    }
+    async function updated(event: Event) {
+      if ((event as CustomEvent).detail !== id) return;
+      const saved = await loadResultImage(id);
+      if (saved) display(saved.image, saved.hasStory);
+    }
+    void prepare();
+    window.addEventListener(RESULT_IMAGE_SAVED, updated);
+    return () => { alive = false; if (currentUrl) URL.revokeObjectURL(currentUrl); window.removeEventListener(RESULT_IMAGE_SAVED, updated); };
+  }, [id, text, prompt, result, checks, precheck, retry]);
+
+  function saveImage() {
+    if (!image) return;
+    const link = document.createElement("a");
+    link.href = image.url; link.download = "humansonly-result.png";
+    document.body.appendChild(link); link.click(); link.remove();
+  }
+  async function share() {
+    if (!image || result === "error") return;
+    const file = new File([image.blob], "humansonly-result.png", { type: "image/png" });
+    const copy = shareText(result, attemptsRemaining);
+    if (navigator.share && navigator.canShare?.({ files: [file] })) {
+      setMessage("Choose X to share the image and post text.");
+      try { await navigator.share({ files: [file], text: copy }); }
+      catch (cause) { setMessage(cause instanceof Error && cause.name === "AbortError" ? "" : "Sharing was unavailable. Save the image and open the X draft below."); }
+      return;
+    }
+    // Web intents cannot attach a local image. Prepare the draft and image in
+    // one action, leaving the actual attachment and publication to the visitor.
+    const clipboard = navigator.clipboard && typeof ClipboardItem !== "undefined"
+      ? navigator.clipboard.write([new ClipboardItem({ "image/png": image.blob })]).then(() => true, () => false)
+      : Promise.resolve(false);
+    window.open(intentUrl(result, attemptsRemaining), "_blank", "popup,width=640,height=720,noopener,noreferrer");
+    saveImage();
+    setMessage("X opens in a new window. Attach the downloaded image to your post.");
+    if (await clipboard) setMessage("Image copied and downloaded. Paste it into the new X window, or attach the download.");
+  }
+  return <div className="share-result"><p>Result image // {result === "passed" ? "Pass" : result === "rejected" ? "Fail" : "Check unavailable"}</p>
+    <div>{result !== "error" && <button className="primary-button" onClick={() => void share()} disabled={!image}>SHARE TO X ↗</button>}
+      <a className="secondary-button" href={image?.url} download="humansonly-result.png" aria-disabled={!image}>Save image</a>
+    </div>
+    {image ? <a className="result-image-preview" href={image.url} target="_blank" rel="noopener noreferrer" aria-label="Open result image">
+      {/* eslint-disable-next-line @next/next/no-img-element -- This private image is generated in the visitor's browser. */}
+      <img src={image.url} alt={`HumansOnly result image: ${result === "passed" ? "Pass" : result === "rejected" ? "Fail" : "Check unavailable"}`} />
+    </a> : error ? <p role="alert">Could not create the image. <button className="text-button" onClick={() => { setError(false); setRetry(value => value + 1); }}>Retry image</button></p> : <p role="status">Preparing your result image…</p>}
+    {image && <small>{image.hasStory ? "Includes a story excerpt and all three checks. Saved only in this browser." : "Includes the available check results. The original story is no longer available here."}</small>}
+    {message && <p role="status">{message} <a href={result === "error" ? undefined : intentUrl(result, attemptsRemaining)} target="_blank" rel="noopener noreferrer">Open X draft ↗</a></p>}
+  </div>;
 }

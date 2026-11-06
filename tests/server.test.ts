@@ -390,3 +390,44 @@ test('history includes service errors without labeling them failed checks',async
   assert.equal(data.attemptsRemaining,2);assert.equal(data.history[0].state,'error');
   assert.equal(data.history[0].precheck,'passed');assert.equal(data.history[0].checks,null);
 });
+
+test('diagnostics publish only aggregated allowlisted error reasons',async()=>{
+  const f=fixture(), c=await f.start();f.setSubmitStatus(402);
+  await f.request('/api/submit',{challengeId:c.id,text:f.writing()});
+  f.sql.prepare("INSERT INTO challenges (id,session_id,prompt,state,created_at,expires_at,submitted_at,finished_at,outcome,policy_version) VALUES ('private-id','private-session','private-prompt','error',1,2,1,2,?,'old')").run('secret diagnostic /private/path');
+  const response=await f.request('/api/diagnostics');assert.equal(response.status,200);
+  assert.equal(response.headers.get('cache-control'),'no-store, private');
+  const data=await response.json() as {totalErrors:number;detailsUnavailable:number;services:{validatorOnline:boolean;detectorPausedUntil:number|null};errors:{code:string;count:number;description:string}[]};
+  assert.equal(data.totalErrors,2);assert.equal(data.detailsUnavailable,0);assert.equal(data.services.validatorOnline,true);assert.ok(data.services.detectorPausedUntil);
+  assert.deepEqual(data.errors.map(x=>x.code).sort(),['provider_billing','unknown']);
+  const serialized=JSON.stringify(data);
+  for(const value of ['private-id','private-session','private-prompt','secret diagnostic','/private/path','unit-test','task_id','session_id','check_details'])assert.ok(!serialized.includes(value));
+  f.sql.prepare('DELETE FROM challenges').run();
+  const cleared=await (await f.request('/api/diagnostics')).json() as typeof data;
+  assert.equal(cleared.totalErrors,2);assert.equal(cleared.detailsUnavailable,2);assert.deepEqual(cleared.errors,[]);
+});
+
+test('shortcut grants retries only to its server session and preserves verification gates',async()=>{
+  const f=fixture();
+  assert.equal((await f.request('/api/diagnostics/unlock',{code:'wrong'})).status,400);
+  assert.equal(f.cookie,'');
+  assert.equal((await f.request('/api/diagnostics/unlock',{code:'uuddlrlrba'},{origin:'https://elsewhere.example'})).status,403);
+  assert.equal((await f.request('/api/diagnostics/unlock',{code:'uuddlrlrba'})).status,200);
+  const unlockedCookie=f.cookie;
+  assert.equal((await f.request('/api/room')).status,403);
+  assert.equal((await f.request('/api/challenge',{})).status,400,'the shortcut never replaces Turnstile');
+  for(let i=0;i<7;i++) {
+    const c=await f.start();
+    assert.equal((await f.request('/api/submit',{challengeId:c.id,text:f.writing()})).status,202);
+    await f.complete(c.id,{setting:true,characters:true,conflict:true,story:false});
+  }
+  const status=await (await f.request('/api/status')).json() as {unlimitedAttempts:boolean;attemptsRemaining:number|null;history:AttemptResult[]};
+  assert.equal(status.unlimitedAttempts,true);assert.equal(status.attemptsRemaining,null);assert.equal(status.history.length,7);
+  f.cookie='';
+  const other=await (await f.request('/api/status?unlimitedAttempts=true')).json() as typeof status;
+  assert.equal(other.unlimitedAttempts,false);assert.equal(other.attemptsRemaining,0);assert.deepEqual(other.history,[]);
+  f.cookie=unlockedCookie;
+  f.sql.prepare("UPDATE demo_budget SET prior_reserved_cents=limit_cents-105").run();
+  assert.equal((await f.request('/api/challenge',{turnstileToken:'fresh'})).status,503,'the shared budget still closes the test');
+  assert.equal(f.calls,7);
+});

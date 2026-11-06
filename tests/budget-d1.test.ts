@@ -39,3 +39,21 @@ test("real D1 atomically enforces the lifetime budget and three-try quotas", asy
     assert.equal((await budgetState(quotaDb, "shared-browser", "fresh-network")).attemptsRemaining, 0);
   } finally { await mf.dispose(); }
 });
+
+test('real D1 keeps the global budget atomic for an unlimited session',async()=>{
+  const mf=new Miniflare(convertV4MiniflareOptions({modules:true,script:"export default {fetch(){return new Response('test')}}",compatibilityDate:'2026-05-15',d1Databases:['DB']}));
+  try {
+    const db=await mf.getD1Database('DB') as unknown as D1Database;
+    for(const file of readdirSync(new URL('../drizzle/',import.meta.url)).filter(f=>f.endsWith('.sql')).sort()) {
+      const sql=readFileSync(new URL(`../drizzle/${file}`,import.meta.url),'utf8').split('--> statement-breakpoint').filter(s=>s.trim());
+      await db.batch(sql.map(s=>db.prepare(s)));
+    }
+    const now=Date.now();await initializeBudget(db,now);
+    await db.prepare("INSERT INTO rate_buckets(id,count,expires_at) VALUES('demo-unlimited:unlocked',1,?)").bind(now+60000).run();
+    const claims=await Promise.all(Array.from({length:45},(_,i)=>reserveScan(db,`unlimited-${i}`,'unlocked','same-network',now)));
+    assert.equal(claims.filter(Boolean).length,33);assert.equal((await budgetState(db,'unlocked','same-network',now)).reservedCents,495);
+    assert.equal(await reserveScan(db,'extra','unlocked','same-network',now),null);
+    assert.equal((await budgetState(db,'other','same-network',now)).unlimitedAttempts,false);
+    assert.equal((await budgetState(db,'unlocked','same-network',now+60001)).unlimitedAttempts,false);
+  } finally {await mf.dispose();}
+});

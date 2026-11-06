@@ -1,12 +1,12 @@
 # HumansOnly
 
-A small experiment: write a 200–250-word story using three randomly assigned concepts. Every prompt includes cats.
+A capture-the-flag challenge for you and your favorite AI. Get a 200–250-word story past the captcha to reach the protected page. Every prompt includes cats.
 
-**Try it:** [captcha.10xcatdad.xyz](https://captcha.10xcatdad.xyz) · **Contact:** [@10xCatDad](https://x.com/10xCatDad)
+**Play //** [captcha.10xcatdad.xyz](https://captcha.10xcatdad.xyz) · **Contact //** [@10xCatDad](https://x.com/10xCatDad)
 
 Cloudflare Turnstile checks the browser before issuing a writing prompt. Pangram checks for AI writing. Codex checks the setting/time, characters, central conflict, and whether the response is a story. Passing all three opens a protected page for an hour. The checks can make mistakes; passing does not prove someone is human.
 
-The public test has a $5 API budget and three tries per visitor. Results show both checks, overall totals, and an optional submission image with a prefilled X composer. The visitor chooses whether to post. Light, dark, and system themes are supported. Typing, pasting, and dictation work.
+The public test has a $5 API budget and three tries per visitor. Results show all three checks and overall totals. Result images with a short story excerpt and scores are generated automatically and kept in this browser for previous results. The share button passes an image and text to native sharing where supported; otherwise it opens X in a new window and downloads the image for attachment. The visitor chooses whether to post. Light, dark, and system themes are supported. Typing, pasting, and dictation work.
 
 ## Development
 
@@ -59,6 +59,6 @@ The optional `study:*` scripts are development tools. Detector and bot trials ca
 
 ## Data and publishing
 
-Cloudflare checks browser signals. Stories go to Pangram and OpenAI. The app and private worker do not save story text or include it in logs. Drafts stay in the browser tab. Anonymous attempt metadata and aggregate results are retained for the experiment. Provider data handling follows [Pangram’s privacy policy](https://www.pangram.com/privacy-policy) and [OpenAI’s privacy policy](https://openai.com/policies/privacy-policy/).
+Cloudflare checks browser signals. Stories go to Pangram and OpenAI. The server and private worker do not save story text or include it in logs. Drafts stay in the browser tab. Result images, including their story excerpts, stay in the visitor’s browser until browser data is cleared or the local image cache fills. Anonymous attempt metadata and aggregate results are retained for the experiment. Provider data handling follows [Pangram’s privacy policy](https://www.pangram.com/privacy-policy) and [OpenAI’s privacy policy](https://openai.com/policies/privacy-policy/).
 
 Publish through the Sites source workflow so the pushed source, migrations, and build artifact match. Keep secrets in hosting settings and ignored local files. The GitHub repository is an anonymous source mirror; it does not contain the owner’s private deployment history.

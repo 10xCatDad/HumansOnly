@@ -2,6 +2,7 @@ import { ACCESS_MS, CHALLENGE_MS, createPrompt, inspectWriting, MAX_WORDS, MIN_W
 import { getResult, submitText, ProviderError, type Fetcher } from "./pangram.ts";
 import { initializeBudget, budgetState, reserveScan, DEMO_ID, SCAN_RESERVATION_CENTS, PANGRAM_MODEL } from "./budget.ts";
 import { captureCompletedResults, overallStats } from "./stats.ts";
+import { serviceDiagnostics } from "./diagnostics.ts";
 import { parseConcepts, conceptsPass, type CheckDetails, type AttemptResult } from "./validation.ts";
 import { turnstileReady, verifyTurnstile, TurnstileUnavailable, type TurnstileEnv } from "./turnstile.ts";
 
@@ -25,11 +26,12 @@ function ready(env: AppEnv) { return turnstileReady(env) && !!(env.PANGRAM_API_K
 async function availability(env: AppEnv, db: D1Database, now: number, sessionId?: string, network?: string) {
   const paused = await db.prepare("SELECT id FROM rate_buckets WHERE id = 'provider-cooldown' AND expires_at > ?").bind(now).first();
   const validator = await db.prepare("SELECT id FROM rate_buckets WHERE id = 'validator-heartbeat' AND expires_at > ?").bind(now).first();
-  const budget = await budgetState(db, sessionId, network);
+  const budget = await budgetState(db, sessionId, network, now);
   const budgetExhausted = budget.remainingCents < SCAN_RESERVATION_CENTS;
   const attemptLimit = budget.attemptsRemaining === 0;
   return { turnstileSiteKey: turnstileReady(env) ? env.TURNSTILE_SITE_KEY : null, configured: ready(env) && !!validator && !paused && !budgetExhausted && !attemptLimit,
     attemptsRemaining: budget.attemptsRemaining,
+    unlimitedAttempts: budget.unlimitedAttempts,
     closedReason: budgetExhausted ? "budget" : attemptLimit ? "attempts" : null,
     serviceMessage: budgetExhausted ? "The demo’s API budget has been used up."
       : attemptLimit ? "You’ve used all 3 tries."
@@ -44,6 +46,11 @@ async function sessionFor(request: Request, db: D1Database, now: number): Promis
   const raw = request.headers.get("cookie")?.split(";").map(v => v.trim()).find(v => v.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
   if (!raw || !/^[a-f0-9]{64}$/.test(raw)) return null;
   return db.prepare("SELECT id, expires_at, grant_expires_at FROM sessions WHERE id = ? AND expires_at > ?").bind(await hash(raw), now).first<Session>();
+}
+async function createSession(request: Request, db: D1Database, now: number) {
+  const raw = token(), session: Session = { id: await hash(raw), expires_at: now + 365 * DAY, grant_expires_at: 0 };
+  await db.prepare("INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)").bind(session.id, now, session.expires_at).run();
+  return { session, cookie: `${COOKIE}=${raw}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${new URL(request.url).protocol === "https:" ? "; Secure" : ""}` };
 }
 function assertOrigin(request: Request) {
   if (request.method === "GET") return;
@@ -100,7 +107,7 @@ async function attemptHistory(db: D1Database, sessionId?: string): Promise<Attem
     SELECT r.challenge_id AS id, d.outcome AS state, r.created_at AS submitted_at, NULL AS check_details, NULL AS policy_version
     FROM demo_reservations r JOIN demo_results d ON d.challenge_id = r.challenge_id AND d.demo_id = r.budget_id
     WHERE r.session_id = ? AND r.budget_id = ? AND NOT EXISTS (SELECT 1 FROM challenges c WHERE c.id = r.challenge_id)
-    ORDER BY submitted_at DESC, id DESC LIMIT 3
+    ORDER BY submitted_at DESC, id DESC LIMIT 50
   `).bind(sessionId, sessionId, DEMO_ID).all<{ id: string; state: AttemptResult["state"]; submitted_at: number; check_details: string | null; policy_version: string | null }>();
   return rows.results.map(row => ({ id: row.id, state: row.state, submittedAt: row.submitted_at,
     precheck: row.policy_version ? row.policy_version === POLICY_VERSION ? "passed" : "not-run" : null,
@@ -161,6 +168,17 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
     await db.prepare("UPDATE challenges SET state = 'error', outcome = 'validation_timeout', finished_at = ? WHERE state = 'checking' AND submitted_at < ?").bind(now, now - 300_000).run();
     await initializeBudget(db, now);
     await captureCompletedResults(db);
+    if (path === "/api/diagnostics" && request.method === "GET") {
+      return json(await serviceDiagnostics(db, now, { browserConfigured: turnstileReady(env), detectorConfigured: !!env.PANGRAM_API_KEY?.trim() }));
+    }
+    if (path === "/api/diagnostics/unlock" && request.method === "POST") {
+      const body = await readBody(request);
+      if (body.code !== "uuddlrlrba") throw new GateError(400, "code", "Code not recognized.");
+      let session = await sessionFor(request, db, now), cookie: string | null = null;
+      if (!session) ({ session, cookie } = await createSession(request, db, now));
+      await db.prepare("INSERT INTO rate_buckets (id, count, expires_at) VALUES (?, 1, ?) ON CONFLICT(id) DO UPDATE SET expires_at = excluded.expires_at").bind(`demo-unlimited:${session.id}`, session.expires_at).run();
+      return json({ unlocked: true, unlimitedAttempts: true }, 200, cookie ? { "Set-Cookie": cookie } : {});
+    }
     if (path === "/api/status" && request.method === "GET") {
       const session = await sessionFor(request, db, now);
       const current = session ? await db.prepare("SELECT * FROM challenges WHERE session_id = ? AND ((policy_version = ? AND state = 'open' AND expires_at > ?) OR (state = 'checking' AND policy_version IN ('writing-turnstile-v4', 'writing-concepts-v3'))) ORDER BY created_at DESC LIMIT 1").bind(session.id, POLICY_VERSION, now).first<Challenge>() : null;
@@ -169,14 +187,15 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
     if (path === "/api/challenge" && request.method === "POST") {
       const network = await networkKey(request, env);
       let session = await sessionFor(request, db, now), cookie: string | null = null;
-      enforceLimits(await budgetState(db, session?.id, network));
+      const limits = await budgetState(db, session?.id, network, now);
+      enforceLimits(limits);
       if (session) {
         const current = await db.prepare("SELECT * FROM challenges WHERE session_id = ? AND ((policy_version = ? AND state = 'open' AND expires_at > ?) OR (state = 'checking' AND policy_version IN ('writing-turnstile-v4', 'writing-concepts-v3'))) ORDER BY created_at DESC LIMIT 1").bind(session.id, POLICY_VERSION, now).first<Challenge>();
         if (current) return json({ challenge: publicChallenge(current), ...await availability(env, db, now, session.id, network) });
       }
       if (!turnstileReady(env)) throw new GateError(503, "browser_check_unavailable", "The browser check is temporarily unavailable.");
       const gateBody = await readBody(request);
-      await reserve(db, `browser-check:${network}`, 30, HOUR, now);
+      await reserve(db, `browser-check:${network}`, limits.unlimitedAttempts ? 120 : 30, HOUR, now);
       try {
         const verified = await verifyTurnstile(gateBody.turnstileToken, env.TURNSTILE_SECRET_KEY!, new URL(request.url).hostname, request.headers.get("cf-connecting-ip"), options.fetcher);
         if (!verified) throw new GateError(400, "browser_check", "The browser check failed or expired. Please retry it.");
@@ -184,13 +203,11 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
         if (error instanceof TurnstileUnavailable) throw new GateError(503, "browser_check_unavailable", "The browser check is temporarily unavailable. Please retry it.");
         throw error;
       }
-      await reserve(db, `issue-network:${network}`, 12, HOUR, now);
+      if (!limits.unlimitedAttempts) await reserve(db, `issue-network:${network}`, 12, HOUR, now);
       if (!session) {
-        const raw = token(); session = { id: await hash(raw), expires_at: now + 365 * DAY, grant_expires_at: 0 };
-        await db.prepare("INSERT INTO sessions (id, created_at, expires_at) VALUES (?, ?, ?)").bind(session.id, now, session.expires_at).run();
-        cookie = `${COOKIE}=${raw}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000${new URL(request.url).protocol === "https:" ? "; Secure" : ""}`;
+        ({ session, cookie } = await createSession(request, db, now));
       }
-      await reserve(db, `issue-session:${session.id}`, 6, HOUR, now);
+      if (!limits.unlimitedAttempts) await reserve(db, `issue-session:${session.id}`, 6, HOUR, now);
       const c: Challenge = { id: crypto.randomUUID(), session_id: session.id, prompt: JSON.stringify(createPrompt()), state: "open", created_at: now, expires_at: now + CHALLENGE_MS, submitted_at: null, task_id: null, next_poll_at: 0, outcome: null };
       await db.prepare("INSERT INTO challenges (id, session_id, prompt, state, created_at, expires_at, policy_version) VALUES (?, ?, ?, 'open', ?, ?, ?)").bind(c.id, c.session_id, c.prompt, now, c.expires_at, POLICY_VERSION).run();
       await db.batch([db.prepare("DELETE FROM rate_buckets WHERE expires_at < ?").bind(now - DAY), db.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now - DAY), db.prepare("DELETE FROM challenges WHERE created_at < ?").bind(now - 30 * DAY)]);
@@ -215,7 +232,7 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
       const body = await readBody(request), c = await getChallenge(db, body.challengeId, session);
       if (c.state !== "open") return json({ state: c.state, challengeId: c.id }, c.state === "checking" ? 202 : 409);
       const network = await networkKey(request, env);
-      enforceLimits(await budgetState(db, session.id, network));
+      enforceLimits(await budgetState(db, session.id, network, now));
       if (!(await availability(env, db, now, session.id, network)).configured) throw new GateError(503, "provider", "Live checks are temporarily unavailable. Please try again in a few minutes.");
       if (c.policy_version !== POLICY_VERSION) throw new GateError(410, "expired", "This prompt has changed. Please get a new prompt.");
       if (c.expires_at <= now) throw new GateError(410, "expired", "This prompt has expired. Please start a new challenge.");
@@ -227,7 +244,7 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
       try {
         const reserved = await reserveScan(db, c.id, session.id, network, now);
         if (!reserved) {
-          enforceLimits(await budgetState(db, session.id, network));
+          enforceLimits(await budgetState(db, session.id, network, now));
           throw new GateError(409, "already_submitted", "This challenge has already reserved a check. Please start a new prompt.");
         }
       } catch (error) {
@@ -237,7 +254,7 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
       try {
         const taskId = await submitText(body.text, env.PANGRAM_API_KEY!, PANGRAM_MODEL, options.fetcher);
         await db.prepare("UPDATE challenges SET task_id = ? WHERE id = ? AND state = 'checking'").bind(taskId, c.id).run();
-        return json({ state: "checking", challengeId: c.id, attemptsRemaining: (await budgetState(db, session.id, network)).attemptsRemaining }, 202);
+        return json({ state: "checking", challengeId: c.id, attemptsRemaining: (await budgetState(db, session.id, network, now)).attemptsRemaining }, 202);
       } catch (error) {
         // An ambiguous POST failure may already have been billed. Never retry it automatically.
         const code = error instanceof ProviderError ? error.code : "unavailable";
