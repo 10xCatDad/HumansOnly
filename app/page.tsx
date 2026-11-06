@@ -12,15 +12,16 @@ import { BrowserGate } from "@/components/BrowserGate";
 import { ServiceDiagnostics } from "@/components/ServiceDiagnostics";
 import { ResultDialog } from "@/components/ResultDialog";
 import { XIcon } from "@/components/XIcon";
+import { CopyPrompt } from "@/components/CopyPrompt";
 import type { CheckDetails, PrecheckResult, AttemptResult } from "@/lib/validation";
 
-type Challenge = { precheck?: PrecheckResult; id: string; prompt: StoryPrompt; state: string; createdAt: number; expiresAt: number; minWords: number; maxWords: number };
+type Challenge = { precheck?: PrecheckResult; id: string; prompt: StoryPrompt; state: string; createdAt: number; submittedAt?: number; expiresAt: number; minWords: number; maxWords: number };
 type Phase = "intro" | "gate" | "writing" | "checking" | "passed" | "rejected" | "error" | "room" | "closed";
 type Room = { title: string; message: string; expiresAt: number; receipt: string };
 type Overall = { attempts: number; passed: number; failed: number; errors: number; unfinished: number };
 const DRAFT_KEY = "humanity-draft-v3";
 
-type ApiResult = { history?: AttemptResult[]; turnstileSiteKey?: string | null; checks?: CheckDetails | null; configured: boolean; challenge: Challenge; state: Phase; accessExpiresAt: number | null; delayed?: boolean; serviceMessage?: string; unlimitedAttempts?: boolean; attemptsRemaining?: number | null; closedReason?: "budget" | "attempts" | null; overall?: Overall };
+type ApiResult = { submittedAt?: number; history?: AttemptResult[]; turnstileSiteKey?: string | null; checks?: CheckDetails | null; configured: boolean; challenge: Challenge; state: Phase; accessExpiresAt: number | null; delayed?: boolean; serviceMessage?: string; unlimitedAttempts?: boolean; attemptsRemaining?: number | null; closedReason?: "budget" | "attempts" | null; overall?: Overall };
 class ApiError extends Error { status: number; code?: string; constructor(message: string, status: number, code?: string) { super(message); this.status = status; this.code = code; } }
 
 async function api<T = ApiResult>(path: string, body?: unknown): Promise<T> {
@@ -46,6 +47,7 @@ export default function Home() {
   const [turnstileSiteKey, setTurnstileSiteKey] = useState<string | null>(null);
   const [gateAttempt, setGateAttempt] = useState(0);
   const [resultOpen, setResultOpen] = useState(false);
+  const [submittedAt, setSubmittedAt] = useState<number | undefined>();
   const [checks, setChecks] = useState<CheckDetails | null>(null);
   const [automated, setAutomated] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -74,7 +76,7 @@ export default function Home() {
       if (data.accessExpiresAt) { setAccessExpiresAt(data.accessExpiresAt); setPhase("passed"); return; }
       if (data.closedReason && !data.challenge) { setPhase("closed"); return; }
       if (data.challenge) {
-        setChallenge(data.challenge);
+        setChallenge(data.challenge); setSubmittedAt(data.challenge.submittedAt);
         setPhase(data.challenge.state === "checking" ? "checking" : "writing");
         try {
           const draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || "null");
@@ -110,7 +112,7 @@ export default function Home() {
         const result = await api(`/api/result?id=${encodeURIComponent(challenge!.id)}`);
         if (!alive) return;
         if (["passed", "rejected", "error"].includes(result.state)) {
-          setChecks(result.checks || null); setPhase(result.state);
+          setChecks(result.checks || null); setSubmittedAt(result.submittedAt); setPhase(result.state);
           if (result.checks && ["passed", "rejected"].includes(result.state)) setResultOpen(true); setAccessExpiresAt(result.accessExpiresAt || null); setMessage("");
           await refreshAvailability();
           try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* Optional storage. */ }
@@ -143,7 +145,7 @@ export default function Home() {
   async function start(turnstileToken?: string) {
     if (navigator.webdriver || busy) return;
     if (!turnstileToken) { setMessage(""); setGateAttempt(n => n + 1); setPhase("gate"); return; }
-    setChecks(null); setResultOpen(false);
+    setChecks(null); setSubmittedAt(undefined); setResultOpen(false);
     setBusy(true); setMessage(""); setReported(false); setFeedback(null);
     try {
       const result = await api("/api/challenge", { turnstileToken });
@@ -199,16 +201,16 @@ export default function Home() {
         <div className="main-grid">
           <section className="introduction">
             <h1>Bad Robot, Go Away <span className="title-context">// Challenge I</span></h1>
-            <p className="intro-copy">A capture-the-flag challenge for you and your favorite AI. Beat the captcha to reach the protected page. (Challenges II through V coming soon.)</p>
+            <p className="intro-copy">Try to get an LLM (ChatGPT, Codex, or another model) through this captcha automatically, or copy and paste its response yourself. Pass every check to reach the protected page. (Challenges II through V coming soon.)</p>
             {overall && <div className="overall-stats" aria-label="Leaderboard info"><span>LEADERBOARD INFO //</span><span><strong>{overall.attempts}</strong> {overall.attempts === 1 ? "attempt" : "attempts"}</span><span><strong>{overall.passed}</strong> passed</span><span><strong>{overall.failed}</strong> failed</span>{overall.unfinished > 0 && <span>{overall.unfinished} unfinished</span>}</div>}
           </section>
           <section className={`challenge-card ${phase === "writing" ? "is-writing" : ""}`} id="challenge" aria-label="Writing challenge">
             <div className="card-topline"><span><span className={`status-dot ${phase === "passed" || phase === "room" ? "success" : ""}`} />{phase === "passed" || phase === "room" ? "ACCESS GRANTED" : "CHALLENGE I // CAPTCHA"}</span><span className="attempts-remaining" aria-label="Attempts remaining" aria-live="polite"><strong>{configured === null ? "…" : unlimitedAttempts ? "∞" : attemptsRemaining}{!unlimitedAttempts && <small> / 3</small>}</strong><span>{unlimitedAttempts ? "unlimited tries" : "attempts left"}</span></span></div>
             {configured === false && !["passed", "room", "closed"].includes(phase) && <div className="setup-notice" role="status"><strong>Checks unavailable.</strong> {serviceMessage || "You can still view a prompt."}</div>}
             {phase === "intro" && <div className="welcome-content">
-              <h2 ref={heading} tabIndex={-1}>How to play // the captcha</h2>
-              <p>Clear the browser check, then write or generate a 200–250 word story using the assigned setting/time, characters, and conflict. There’s always a cat. Pass every check to reach the protected page. {unlimitedAttempts ? "Unlimited retries unlocked." : "You get 3 tries."}</p>
-              <button className="primary-button" onClick={() => void start()} disabled={busy || automated || configured === null || !!closedReason}><span>{busy ? "LOADING…" : "BEGIN CAPTCHA ATTEMPT // PROVE YOUR HUMANITY"}</span><ArrowRight size={19} /></button>
+              <h2 ref={heading} tabIndex={-1}>GOAL // CAPTURE THE FLAG WITH AN LLM</h2>
+              <p>Clear the browser check, then have your LLM write a 200–250 word story using the assigned setting/time, characters, and conflict. There’s always a cat. Pass every check to reach the protected page. {unlimitedAttempts ? "Unlimited retries unlocked." : "You get 3 tries."}</p>
+              <button className="primary-button" onClick={() => void start()} disabled={busy || automated || configured === null || !!closedReason}><span>{busy ? "LOADING…" : "BEGIN ATTEMPT"}</span></button>
             </div>}
             {phase === "gate" && <div className="welcome-content browser-gate"><h2 ref={heading} tabIndex={-1}>Browser check</h2><p>Complete this check to get your writing prompt.</p>{turnstileSiteKey ? <BrowserGate key={gateAttempt} siteKey={turnstileSiteKey} onVerified={token => void start(token)} onError={setMessage} /> : <p role="status">The browser check is temporarily unavailable.</p>}{busy && <p role="status">Opening your prompt…</p>}<button className="text-button" onClick={() => { setMessage(""); setGateAttempt(n => n + 1); void refreshAvailability(); }} disabled={busy}>Retry browser check</button></div>}
             {phase === "closed" && <div className="result-content"><h2 ref={heading} tabIndex={-1}>{closedReason === "attempts" ? "No tries left" : "Demo budget reached"}</h2><p>{serviceMessage}</p></div>}
@@ -216,11 +218,12 @@ export default function Home() {
               <div className="prompt-label"><span>PROMPT</span><span>{expired ? "Prompt expired" : unlimitedAttempts ? "Unlimited tries" : `${attemptsRemaining} ${attemptsRemaining === 1 ? "try" : "tries"} left`}</span></div>
               <div className="captcha-prompt"><h2 ref={heading} tabIndex={-1}>Write a short story</h2><p>Use all three requirements. {challenge.minWords}–{challenge.maxWords} words.</p>
                 <dl><div><dt>Setting / time</dt><dd>{challenge.prompt.setting}</dd></div><div><dt>Characters</dt><dd>{challenge.prompt.characters}</dd></div><div><dt>Conflict</dt><dd>{challenge.prompt.conflict}</dd></div></dl>
+                <CopyPrompt key={challenge.id} prompt={challenge.prompt} minWords={challenge.minWords} maxWords={challenge.maxWords} />
               </div>
               {!writing.billingSafe && <p className="submission-note" role="status">Shorten the text or use fewer symbols.</p>}
               <label className="sr-only" htmlFor="story">Your short story</label>
               <div className="editor-wrap"><textarea ref={editor} id="story" value={text} onChange={e => setText(e.target.value)} placeholder="Write or paste your response…" maxLength={8000} aria-describedby="word-count writing-privacy" disabled={busy || expired} spellCheck /><div className="editor-bottom"><span>Draft saved in this tab</span><span id="word-count" className={writing.count > challenge.maxWords ? "over-limit" : writing.valid ? "count-ready" : ""}>{writing.count} <span>/ {challenge.minWords}–{challenge.maxWords} words</span></span></div></div>
-              {expired ? <button className="primary-button" type="button" onClick={() => void start()} disabled={busy}>New prompt <RotateCcw size={17} /></button> : <button className="primary-button" type="submit" disabled={!writing.valid || !configured || busy}>{busy ? "Submitting…" : closedReason ? "No checks available" : configured ? "Check writing" : "Checks unavailable"}<ArrowRight size={19} /></button>}
+              {expired ? <button className="primary-button" type="button" onClick={() => void start()} disabled={busy}>New prompt <RotateCcw size={17} /></button> : <button className="primary-button" type="submit" disabled={!writing.valid || !configured || busy}>{busy ? "SUBMITTING…" : closedReason ? "NO CHECKS AVAILABLE" : configured ? "SUBMIT SOLUTION" : "CHECKS UNAVAILABLE"}<ArrowRight size={19} /></button>}
               <p className="submission-note" id="writing-privacy">Your text goes to external verification services. The server does not save it.</p>
             </form>}
             {phase === "checking" && <div className="result-content" aria-live="polite"><h2 ref={heading} tabIndex={-1}>Checking…</h2><p>Checking AI writing and story requirements. This may take a minute.</p><div className="loading-track"><span /></div></div>}
@@ -233,7 +236,7 @@ export default function Home() {
               <button className="secondary-button view-result" onClick={() => setResultOpen(true)}>View result // share</button>
               <ResultDialog open={resultOpen} result={phase === "rejected" ? "rejected" : "passed"} onClose={() => setResultOpen(false)}>
                 <ResultDetails checks={checks} precheck={challenge.precheck} />
-                <ShareResult id={challenge.id} attemptsRemaining={unlimitedAttempts ? null : attemptsRemaining} checks={checks} text={text} prompt={challenge.prompt} result={phase === "rejected" ? "rejected" : "passed"} />
+                <ShareResult id={challenge.id} submittedAt={submittedAt} attemptsRemaining={unlimitedAttempts ? null : attemptsRemaining} checks={checks} text={text} prompt={challenge.prompt} result={phase === "rejected" ? "rejected" : "passed"} />
                 <div className="study-feedback"><p>{feedback ? "Feedback saved" : "How was it written? (optional)"}</p>{!feedback && <div><button onClick={() => giveFeedback("human")} disabled={busy}>By me</button><button onClick={() => giveFeedback("assisted")} disabled={busy}>AI-assisted</button><button onClick={() => giveFeedback("ai")} disabled={busy}>AI-generated</button></div>}</div>
                 {phase === "passed" && <button className="secondary-button" onClick={enterRoom} disabled={busy}>Open protected page <ArrowRight size={16} /></button>}
               </ResultDialog>
@@ -243,7 +246,7 @@ export default function Home() {
         </div>
         {history && <AttemptHistory results={history} attemptsRemaining={unlimitedAttempts ? null : attemptsRemaining} />}
         <section className="faq-section" id="how-it-works" aria-label="Details">
-          <details><summary>Data and privacy<span>+</span></summary><p>Cloudflare Turnstile checks browser signals before issuing a prompt. Text goes to Pangram for AI detection and OpenAI for the story check. The server does not save the text. Drafts stay in this tab. Result images are saved in this browser so you can view and share them later. Clearing browser data removes them. Prompt details, timings, detailed check results, and feedback are removed after 30 days when a new prompt is issued. Anonymous attempt records and totals stay for this test. The session cookie lasts up to a year. See <a href="https://www.pangram.com/privacy-policy" target="_blank" rel="noreferrer">Pangram’s privacy policy</a> and <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noreferrer">OpenAI’s privacy policy</a> for their handling of submitted text. See <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noreferrer">Cloudflare’s privacy policy</a> for the browser check.</p></details>
+          <details><summary>Data and privacy<span>+</span></summary><p>Cloudflare Turnstile checks browser signals before issuing a prompt. Text goes to Pangram for AI detection and OpenAI for the story check. Raw story text is not saved on the server. Drafts stay in this tab. Result images are cached in this browser. Sharing also uploads the image, including its story excerpt, to an unlisted link that anyone with the link can view. Shared images remain available if browser data is cleared; they never appear in the art gallery. Prompt details, timings, detailed check results, and feedback are removed after 30 days when a new prompt is issued. Anonymous attempt records and totals stay for this test. The session cookie lasts up to a year. See <a href="https://www.pangram.com/privacy-policy" target="_blank" rel="noreferrer">Pangram’s privacy policy</a> and <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noreferrer">OpenAI’s privacy policy</a> for their handling of submitted text. See <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noreferrer">Cloudflare’s privacy policy</a> for the browser check.</p></details>
           <details><summary>What does a pass mean?<span>+</span></summary><p>The text was classified as human-written and met the story requirements. Either check can be wrong. A pass does not prove you are human. Access lasts one hour.</p></details>
           <details><summary>Writing options<span>+</span></summary><p>Type, paste, or dictate. Prompts are in English and expire after 30 minutes. There is no alternate verification method in this demo.</p></details>
         </section>

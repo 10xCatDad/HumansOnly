@@ -14,15 +14,16 @@ function PreviousAttempt({ result, number, attemptsRemaining }: { result: Attemp
       <span><strong className={`history-${result.state}`}>{label}</strong><ChevronDown size={16} aria-hidden="true" /></span>
     </button>
     <div id={`history-${result.id}`} hidden={!expanded}>{expanded && <>
-      {result.checks || result.precheck ? <ResultDetails checks={result.checks} precheck={result.precheck || undefined} /> : <p className="history-empty">Detailed results are no longer available.</p>}
-      <ShareResult id={result.id} result={result.state} checks={result.checks} precheck={result.precheck} attemptsRemaining={attemptsRemaining} />
+      <ResultDetails checks={result.checks} precheck={result.precheck || undefined} numbered />
+      <ShareResult id={result.id} result={result.state} checks={result.checks} precheck={result.precheck} submittedAt={result.submittedAt} attemptsRemaining={attemptsRemaining} />
     </>}</div>
   </li>;
 }
 
 export function AttemptHistory({ results, attemptsRemaining }: { results: AttemptResult[]; attemptsRemaining: number | null }) {
   return <section className="attempt-history" aria-labelledby="history-heading">
-    <h2 id="history-heading">Previous results</h2>
+    <h2 id="history-heading">Previous Results</h2>
+    {results.length > 0 && <p className="history-intro">Open an attempt to review its three checks and result image.</p>}
     {results.length ? <ol>{results.map((result, index) => <PreviousAttempt key={result.id} result={result} number={results.length - index} attemptsRemaining={attemptsRemaining} />)}</ol> : <p className="history-empty">Your completed attempts will appear here.</p>}
   </section>;
 }

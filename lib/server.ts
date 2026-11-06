@@ -5,8 +5,9 @@ import { captureCompletedResults, overallStats } from "./stats.ts";
 import { serviceDiagnostics } from "./diagnostics.ts";
 import { parseConcepts, conceptsPass, type CheckDetails, type AttemptResult } from "./validation.ts";
 import { turnstileReady, verifyTurnstile, TurnstileUnavailable, type TurnstileEnv } from "./turnstile.ts";
+import { shareResultImage, type SharingEnv } from "./result-sharing.ts";
 
-export type AppEnv = TurnstileEnv & { DB?: D1Database; PANGRAM_API_KEY?: string; PANGRAM_MODEL?: string; RATE_LIMIT_SECRET?: string; ADMIN_TOKEN?: string; VALIDATOR_TOKEN?: string };
+export type AppEnv = TurnstileEnv & SharingEnv & { DB?: D1Database; PANGRAM_API_KEY?: string; PANGRAM_MODEL?: string; RATE_LIMIT_SECRET?: string; ADMIN_TOKEN?: string; VALIDATOR_TOKEN?: string };
 type Session = { id: string; expires_at: number; grant_expires_at: number };
 type Challenge = { id: string; session_id: string; prompt: string; state: string; created_at: number; expires_at: number; submitted_at: number | null; task_id: string | null; next_poll_at: number; outcome: string | null; policy_version?: string; check_details?: string | null; validation_started_at?: number | null; validation_lease?: string | null };
 const HOUR = 60 * 60_000, DAY = 24 * HOUR, COOKIE = "humanity_session";
@@ -91,7 +92,7 @@ function ipv6Prefix(ip: string) {
   return expanded.slice(0, 4).map(x => x.padStart(4, "0")).join(":");
 }
 function publicChallenge(c: Challenge) {
-  return { id: c.id, prompt: JSON.parse(c.prompt) as StoryPrompt, precheck: c.policy_version === POLICY_VERSION ? "passed" : "not-run", state: c.state, createdAt: c.created_at, expiresAt: c.expires_at, minWords: MIN_WORDS, maxWords: MAX_WORDS };
+  return { id: c.id, prompt: JSON.parse(c.prompt) as StoryPrompt, precheck: c.policy_version === POLICY_VERSION ? "passed" : "not-run", state: c.state, createdAt: c.created_at, submittedAt: c.submitted_at, expiresAt: c.expires_at, minWords: MIN_WORDS, maxWords: MAX_WORDS };
 }
 async function authorized(request: Request, secret?: string) {
   const supplied = request.headers.get("authorization")?.replace(/^Bearer /, "") ?? "";
@@ -163,6 +164,7 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
   try {
     const db = dbFor(env);
     if (path.startsWith("/api/validator/")) return await validatorApi(request, env, db, now, options.fetcher);
+    if (path === "/api/result-image") return await shareResultImage(request, db, env, (await sessionFor(request, db, now))?.id, now, options.fetcher);
     assertOrigin(request);
     if (["/api/challenge", "/api/submit"].includes(path) && /HeadlessChrome|Playwright|Puppeteer|Selenium|GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-User|anthropic-ai|PerplexityBot|Google-Extended|Bytespider|CCBot/i.test(request.headers.get("user-agent") || "")) throw new GateError(403, "automation", "Automated interaction is not allowed.");
     await db.prepare("UPDATE challenges SET state = 'error', outcome = 'validation_timeout', finished_at = ? WHERE state = 'checking' AND submitted_at < ?").bind(now, now - 300_000).run();
@@ -265,7 +267,7 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
     }
     if (path === "/api/result" && request.method === "GET") {
       const c = await getChallenge(db, new URL(request.url).searchParams.get("id"), session);
-      if (c.state !== "checking") return json({ state: c.state, checks: details(c), accessExpiresAt: session.grant_expires_at > now ? session.grant_expires_at : null });
+      if (c.state !== "checking") return json({ state: c.state, submittedAt: c.submitted_at, checks: details(c), accessExpiresAt: session.grant_expires_at > now ? session.grant_expires_at : null });
       return json({ state: "checking" }, 202);
     }
     if (path === "/api/feedback" && request.method === "POST") {

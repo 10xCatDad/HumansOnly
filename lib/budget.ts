@@ -7,11 +7,18 @@ export const ATTEMPT_LIMIT = 3;
 export const PANGRAM_MODEL = "pangram-4.1";
 export const MAX_BILLING_WORDS = 300;
 
-// Count ASCII letter/digit runs and every other non-whitespace character.
-// This deliberately overcounts punctuation, non-Latin prose, and emoji, so
-// whitespace tricks and giant symbol blocks cannot evade the paid input cap.
+// Count ASCII word segments, with limited room for normal punctuation attached
+// to a word (quotes, commas, contractions, etc.). Standalone punctuation,
+// excessive punctuation, non-ASCII characters, and symbols still count toward
+// the conservative bound so large symbol blocks cannot evade the paid cap.
 export function billingWordBound(text: string) {
-  return (text.normalize("NFKC").match(/[A-Za-z0-9]+|[^\s]/gu) ?? []).length;
+  return (text.normalize("NFKC").match(/\S+/gu) ?? []).reduce((sum, chunk) => {
+    const words = (chunk.match(/[A-Za-z0-9]+/g) ?? []).length;
+    const remainder = chunk.replace(/[A-Za-z0-9]/g, "");
+    const punctuation = (remainder.match(/\p{P}/gu) ?? []).length;
+    const other = (remainder.match(/[^\p{P}]/gu) ?? []).length;
+    return sum + words + other + Math.max(0, punctuation - (words > 0 ? 4 : 0));
+  }, 0);
 }
 
 export async function initializeBudget(db: D1Database, now: number) {

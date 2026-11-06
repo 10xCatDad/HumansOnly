@@ -1,4 +1,5 @@
-export type SavedResultImage = { id: string; image: Blob; hasStory: boolean; savedAt: number; version: 1 };
+export const RESULT_IMAGE_VERSION = 2;
+export type SavedResultImage = { id: string; image: Blob; hasStory: boolean; savedAt: number; version: 1 | 2 };
 export const RESULT_IMAGE_SAVED = "humansonly-result-image-saved";
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -18,7 +19,7 @@ export async function loadResultImage(id: string): Promise<SavedResultImage | nu
         const request = db.transaction("images", "readonly").objectStore("images").get(id);
         request.onsuccess = () => {
           const row = request.result as SavedResultImage | undefined;
-          resolve(row?.version === 1 && row.image instanceof Blob && row.image.type === "image/png" ? row : null);
+          resolve(row && [1, 2].includes(row.version) && row.image instanceof Blob && row.image.type === "image/png" ? row : null);
         };
         request.onerror = () => reject(request.error);
       });
@@ -35,7 +36,7 @@ export async function saveResultImage(row: SavedResultImage): Promise<SavedResul
         const current = store.get(row.id);
         current.onsuccess = () => {
           const previous = current.result as SavedResultImage | undefined;
-          if (previous?.version === 1 && previous.hasStory && !row.hasStory) chosen = previous;
+          if (previous && [1, 2].includes(previous.version) && previous.hasStory && !row.hasStory) chosen = previous;
           else store.put(row);
           const all = store.getAll();
           all.onsuccess = () => {

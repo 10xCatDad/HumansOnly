@@ -8,6 +8,7 @@ const settings = [
   "A coastal village in 1920", "A lunar settlement in 2080", "A city library in 1995", "A mountain inn in 1880",
   "An overnight train in 2026", "A floating market in 2150", "A small-town cinema in 1965", "A remote radio station in 1978",
   "A desert research camp in 2040", "A crowded bakery in 1910", "A city rooftop garden in 2035", "A seaside observatory in 1955",
+  "An orbital greenhouse in 2100",
 ];
 const characters = [
   "Two estranged siblings caring for their mother's cat", "A retired teacher and an apprentice cook who share a stray cat",

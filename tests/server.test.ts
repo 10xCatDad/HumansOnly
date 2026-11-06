@@ -205,7 +205,7 @@ test("prior submitted scans seed the budget exactly once",async()=>{
 });
 test("symbol stuffing and non-Latin blocks cannot evade the billing bound",async()=>{
   const f=fixture(),c=await f.start();
-  for(const extra of ['! '.repeat(301),'漢'.repeat(301)]){
+  for(const extra of ['! '.repeat(301),'漢'.repeat(301),' word'+'!'.repeat(500),' word'+'🐈'.repeat(301)]){
     const r=await f.request('/api/submit',{challengeId:c.id,text:f.writing()+extra});
     assert.equal(r.status,422);
   }
@@ -430,4 +430,64 @@ test('shortcut grants retries only to its server session and preserves verificat
   f.sql.prepare("UPDATE demo_budget SET prior_reserved_cents=limit_cents-105").run();
   assert.equal((await f.request('/api/challenge',{turnstileToken:'fresh'})).status,503,'the shared budget still closes the test');
   assert.equal(f.calls,7);
+});
+
+test('ordinary quoted dialogue and contractions fit the 200–250 word submission limit',async()=>{
+  for(const sentence of ['“Don’t worry,” Mara said. “The cat’s safely inside tonight.”','“Don’t worry,” Mara said. “The cat’s safely inside tonight, promise.”']) {
+    const f=fixture(), c=await f.start();
+    const text=Array(25).fill(sentence).join('\n\n');
+    const inspected=inspectWriting(text);
+    assert.ok([225,250].includes(inspected.count));assert.equal(inspected.billingSafe,true);assert.equal(inspected.valid,true);
+    assert.equal((await f.request('/api/submit',{challengeId:c.id,text})).status,202);
+    assert.equal(f.calls,1);assert.equal((await budgetState(f.db)).reservedCents,15);
+  }
+});
+
+test("result image sharing requires its completed result owner and remains idempotent after cleanup", async () => {
+  const f = fixture(), c = await f.start();
+  f.env.RESULT_IMAGE_TOKEN = "test-image-upload-secret-with-32-characters";
+  const png = new Uint8Array(33); png.set([137,80,78,71,13,10,26,10]);
+  let uploads = 0;
+  const fetcher: typeof fetch = async (url, options) => {
+    uploads++;
+    assert.match(String(url), /^https:\/\/art\.10xcatdad\.xyz\/api\/captcha-results\/[a-f0-9]{64}$/);
+    assert.equal(options?.redirect, 'manual');
+    assert.equal(new Headers(options?.headers).get('authorization'), `Bearer ${f.env.RESULT_IMAGE_TOKEN}`);
+    assert.equal(new Headers(options?.headers).get('x-result-state'), 'passed');
+    return Response.json({ saved:true });
+  };
+  const share = (method = 'POST', cookie = f.cookie, origin = 'http://localhost', body: Uint8Array | null = png, extra: Record<string,string> = {}) => handleApi(new Request(`http://localhost/api/result-image?id=${c.id}`, {method,headers:{cookie,origin,'content-type':'image/png',...extra},body:method==='POST'&&body?body.buffer as ArrayBuffer:null}),f.env,{now:1_800_000_000_001,fetcher});
+  assert.equal((await share('POST','')).status,401);
+  assert.equal((await share()).status,404, 'unfinished results cannot upload');
+  await f.request('/api/submit',{challengeId:c.id,text:f.writing()}); await f.result(c.id);
+  assert.equal((await share('POST',f.cookie,'https://elsewhere.test')).status,403);
+  assert.equal((await share('POST',f.cookie,'http://localhost',png,{'content-type':'text/html'})).status,415);
+  assert.equal((await share('POST',f.cookie,'http://localhost',png,{'content-length':String(3*1024*1024)})).status,413);
+  assert.equal((await share('POST',f.cookie,'http://localhost',new Uint8Array(2*1024*1024+1))).status,413);
+  assert.equal((await share('POST',f.cookie,'http://localhost',new Uint8Array(40))).status,400);
+  const owner = f.cookie; f.cookie = ''; await f.start(); const other = f.cookie; f.cookie = owner;
+  assert.equal((await share('GET',other)).status,404); assert.equal((await share('POST',other)).status,404);
+  assert.equal(uploads,0);
+  const uploaded = await share(); assert.equal(uploaded.status,200);
+  const info = await uploaded.json() as {shareUrl:string;imageUrl:string};
+  assert.match(info.shareUrl,/^https:\/\/art\.10xcatdad\.xyz\/r\/[a-f0-9]{64}$/);
+  assert.equal(info.imageUrl,`${info.shareUrl}/image.png`); assert.ok(!info.shareUrl.includes(c.id));
+  assert.deepEqual(await (await share()).json(),info); assert.equal(uploads,1);
+  f.sql.exec('DELETE FROM challenges');
+  assert.deepEqual(await (await share('GET')).json(),info);
+  assert.equal((await share('GET',other)).status,404);
+  assert.ok(!JSON.stringify(info).includes(f.env.RESULT_IMAGE_TOKEN));
+});
+
+test("uncertain result uploads retry the same opaque key and serialize simultaneous uploads", async () => {
+  const f = fixture(), c = await f.start(); f.env.RESULT_IMAGE_TOKEN = 'test-dedicated-result-image-token';
+  await f.request('/api/submit',{challengeId:c.id,text:f.writing()}); await f.result(c.id);
+  const png = new Uint8Array(33); png.set([137,80,78,71,13,10,26,10]);
+  const urls: string[] = []; let fail = true, release: (() => void) | undefined;
+  const upload = () => handleApi(new Request(`http://localhost/api/result-image?id=${c.id}`,{method:'POST',headers:{cookie:f.cookie,origin:'http://localhost','content-type':'image/png'},body:png}),f.env,{now:1_800_000_000_001,fetcher:async url=>{urls.push(String(url));if(fail)throw new Error('unavailable');await new Promise<void>(r=>{release=r;});return Response.json({saved:true});}});
+  assert.equal((await upload()).status,503); fail=false;
+  const first = upload();
+  while (!release) await new Promise(r=>setTimeout(r,1));
+  assert.equal((await upload()).status,409); release(); assert.equal((await first).status,200);
+  assert.equal(urls.length,2); assert.equal(urls[0],urls[1]);
 });

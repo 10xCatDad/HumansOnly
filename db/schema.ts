@@ -55,3 +55,11 @@ export const demoResults = sqliteTable("demo_results", {
   demoId: text("demo_id").notNull(),
   outcome: text("outcome").notNull(),
 }, t => [index("demo_result_outcome_idx").on(t.demoId, t.outcome), check("valid_demo_result", sql`${t.outcome} IN ('passed', 'rejected', 'error')`)]);
+
+export const resultShares = sqliteTable("result_shares", {
+  challengeId: text("challenge_id").primaryKey(),
+  shareId: text("share_id").notNull().unique(),
+  createdAt: integer("created_at").notNull(),
+  uploadedAt: integer("uploaded_at"),
+  uploadingUntil: integer("uploading_until").notNull().default(0),
+});

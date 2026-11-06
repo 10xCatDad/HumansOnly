@@ -4,11 +4,11 @@ import { themeScript } from "@/lib/theme";
 
 export const metadata: Metadata = {
   title: "Bad Robot, Go Away // Challenge I // HumansOnly",
-  description: "A capture-the-flag challenge for you and your favorite AI. Beat the captcha to reach the protected page. (Challenges II through V coming soon.)",
+  description: "Try to get an LLM (ChatGPT, Codex, or another model) through this captcha automatically, or copy and paste its response yourself. Pass every check to reach the protected page. (Challenges II through V coming soon.)",
   metadataBase: new URL("https://captcha.10xcatdad.xyz"),
   alternates: { canonical: "https://captcha.10xcatdad.xyz/" },
-  openGraph: { type: "website", title: "Bad Robot, Go Away // Challenge I // HumansOnly", description: "A capture-the-flag challenge for you and your favorite AI. Beat the captcha to reach the protected page. (Challenges II through V coming soon.)", images: [{ url: "/social-card.png", width: 1200, height: 630, alt: "HumansOnly // Bad Robot, Go Away // Challenge I" }] },
-  twitter: { card: "summary_large_image", title: "Bad Robot, Go Away // Challenge I // HumansOnly", description: "A capture-the-flag challenge for you and your favorite AI. Beat the captcha to reach the protected page. (Challenges II through V coming soon.)", images: ["/social-card.png"] },
+  openGraph: { type: "website", title: "Bad Robot, Go Away // Challenge I // HumansOnly", description: "Try to get an LLM (ChatGPT, Codex, or another model) through this captcha automatically, or copy and paste its response yourself. Pass every check to reach the protected page. (Challenges II through V coming soon.)", images: [{ url: "/social-card.png", width: 1200, height: 630, alt: "HumansOnly // Bad Robot, Go Away // Challenge I" }] },
+  twitter: { card: "summary_large_image", title: "Bad Robot, Go Away // Challenge I // HumansOnly", description: "Try to get an LLM (ChatGPT, Codex, or another model) through this captcha automatically, or copy and paste its response yourself. Pass every check to reach the protected page. (Challenges II through V coming soon.)", images: ["/social-card.png"] },
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
