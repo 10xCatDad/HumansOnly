@@ -38,6 +38,7 @@ export const demoBudget = sqliteTable("demo_budget", {
   id: text("id").primaryKey(),
   limitCents: integer("limit_cents").notNull(),
   priorReservedCents: integer("prior_reserved_cents").notNull(),
+  priorAttempts: integer("prior_attempts"),
   createdAt: integer("created_at").notNull(),
 }, t => [check("budget_cannot_exceed_five_dollars", sql`${t.limitCents} BETWEEN 0 AND 500`), check("prior_cost_nonnegative", sql`${t.priorReservedCents} >= 0`)]);
 
@@ -58,8 +59,14 @@ export const demoResults = sqliteTable("demo_results", {
 
 export const resultShares = sqliteTable("result_shares", {
   challengeId: text("challenge_id").primaryKey(),
+  imageVersion: integer("image_version").notNull().default(2),
   shareId: text("share_id").notNull().unique(),
   createdAt: integer("created_at").notNull(),
   uploadedAt: integer("uploaded_at"),
   uploadingUntil: integer("uploading_until").notNull().default(0),
+});
+
+export const attemptResets = sqliteTable("attempt_resets", {
+  id: text("id").primaryKey(),
+  completedAt: integer("completed_at"),
 });

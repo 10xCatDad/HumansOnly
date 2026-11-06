@@ -6,8 +6,9 @@ import { serviceDiagnostics } from "./diagnostics.ts";
 import { parseConcepts, conceptsPass, type CheckDetails, type AttemptResult } from "./validation.ts";
 import { turnstileReady, verifyTurnstile, TurnstileUnavailable, type TurnstileEnv } from "./turnstile.ts";
 import { shareResultImage, type SharingEnv } from "./result-sharing.ts";
+import { resetAttempts } from "./attempt-reset.ts";
 
-export type AppEnv = TurnstileEnv & SharingEnv & { DB?: D1Database; PANGRAM_API_KEY?: string; PANGRAM_MODEL?: string; RATE_LIMIT_SECRET?: string; ADMIN_TOKEN?: string; VALIDATOR_TOKEN?: string };
+export type AppEnv = TurnstileEnv & SharingEnv & { DB?: D1Database; PANGRAM_API_KEY?: string; PANGRAM_MODEL?: string; RATE_LIMIT_SECRET?: string; ADMIN_TOKEN?: string; VALIDATOR_TOKEN?: string; ATTEMPT_RESET_TOKEN?: string; ATTEMPT_RESET_ID?: string };
 type Session = { id: string; expires_at: number; grant_expires_at: number };
 type Challenge = { id: string; session_id: string; prompt: string; state: string; created_at: number; expires_at: number; submitted_at: number | null; task_id: string | null; next_poll_at: number; outcome: string | null; policy_version?: string; check_details?: string | null; validation_started_at?: number | null; validation_lease?: string | null };
 const HOUR = 60 * 60_000, DAY = 24 * HOUR, COOKIE = "humanity_session";
@@ -170,6 +171,18 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
     await db.prepare("UPDATE challenges SET state = 'error', outcome = 'validation_timeout', finished_at = ? WHERE state = 'checking' AND submitted_at < ?").bind(now, now - 300_000).run();
     await initializeBudget(db, now);
     await captureCompletedResults(db);
+    if (path === "/api/admin/reset-attempts") {
+      const administrator = await authorized(request, env.ADMIN_TOKEN);
+      const temporaryReset = await authorized(request, env.ATTEMPT_RESET_TOKEN);
+      if (!administrator && !temporaryReset) throw new GateError(401, "unauthorized", "Administrator access is required.");
+      if (request.method !== "POST") throw new GateError(405, "method", "Use POST.");
+      const body = await readBody(request);
+      if (typeof body.resetId !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(body.resetId) || body.confirm !== "clear-attempts-and-usage") throw new GateError(400, "reset", "Provide a reset ID and explicit reset instruction.");
+      if (!administrator && body.resetId !== env.ATTEMPT_RESET_ID) throw new GateError(403, "reset", "This credential is limited to a different reset.");
+      const completedAt = await resetAttempts(db, body.resetId, now);
+      if (completedAt === null) throw new GateError(409, "checks_running", "Checks are still running. Retry this reset after they finish.");
+      return json({ resetId: body.resetId, completedAt, overall: await overallStats(db), budget: await budgetState(db) });
+    }
     if (path === "/api/diagnostics" && request.method === "GET") {
       return json(await serviceDiagnostics(db, now, { browserConfigured: turnstileReady(env), detectorConfigured: !!env.PANGRAM_API_KEY?.trim() }));
     }

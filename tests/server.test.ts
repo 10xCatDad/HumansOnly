@@ -60,6 +60,72 @@ test("anonymous and unverified sessions cannot read protected content", async ()
   await f.start(); assert.equal((await f.request("/api/room")).status, 403);
   assert.equal((await f.request("/api/admin/metrics")).status, 401);
 });
+test("owner reset clears history and quotas while preserving billing, then ignores a replay", async () => {
+  const f = fixture(), resetId = crypto.randomUUID();
+  for (let i = 0; i < 3; i++) {
+    const c = await f.start();
+    await f.request("/api/submit", { challengeId: c.id, text: f.writing() });
+    await f.result(c.id);
+  }
+  f.sql.prepare("UPDATE demo_budget SET prior_reserved_cents = 60").run();
+  f.sql.prepare("INSERT INTO result_shares (challenge_id,share_id,created_at) SELECT id, id, created_at FROM challenges LIMIT 1").run();
+  f.sql.prepare("INSERT INTO rate_buckets (id,count,expires_at) VALUES ('provider-cooldown',1,1)").run();
+  assert.equal((await budgetState(f.db)).reservedCents, 105);
+  assert.equal((await (await f.request('/api/status')).json() as {attemptsRemaining:number}).attemptsRemaining, 0);
+  await f.request('/api/diagnostics/unlock', {code:'uuddlrlrba'});
+  const body = { resetId, confirm: 'clear-attempts-and-usage' };
+  assert.equal((await f.request('/api/admin/reset-attempts', body)).status, 401);
+  assert.equal((await f.request('/api/admin/reset-attempts', body, {authorization:'Bearer unit-test-validator'})).status, 401);
+  assert.equal((await f.request('/api/admin/reset-attempts', {resetId}, {authorization:'Bearer unit-test-admin'})).status, 400);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM challenges').get()!.n, 3);
+  const reset = await f.request('/api/admin/reset-attempts', body, {authorization:'Bearer unit-test-admin'});
+  assert.equal(reset.status, 200);
+  const status = await (await f.request('/api/status')).json() as {history:unknown[];overall:Record<string,number>;attemptsRemaining:number;accessExpiresAt:number|null};
+  assert.deepEqual(status.history, []);
+  assert.deepEqual(status.overall, {attempts:0,passed:0,failed:0,errors:0,unfinished:0});
+  assert.equal(status.attemptsRemaining, 3); assert.equal(status.accessExpiresAt, null);
+  for (const table of ['challenges','demo_results','demo_reservations','result_shares']) assert.equal(f.sql.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()!.n, 0);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM rate_buckets').get()!.n, 2);
+  assert.equal((await budgetState(f.db)).reservedCents, 105);
+  assert.equal((await budgetState(f.db)).remainingCents, 395);
+  const fresh = await f.start(); await f.request('/api/submit', {challengeId:fresh.id,text:f.writing()});
+  const replay = await f.request('/api/admin/reset-attempts', body, {authorization:'Bearer unit-test-admin'});
+  assert.equal(replay.status, 200);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM challenges').get()!.n, 1);
+  assert.equal((await budgetState(f.db)).reservedCents, 120);
+  assert.equal((await (await f.request('/api/status')).json() as {attemptsRemaining:number}).attemptsRemaining, 2);
+  assert.equal((await f.request(`/api/result?id=${fresh.id}`)).status, 202);
+});
+test("temporary reset credentials are scoped and active checks finish before reset", async () => {
+  const f = fixture(), resetId = crypto.randomUUID(), auth = {authorization:'Bearer temporary-reset'};
+  f.env.ATTEMPT_RESET_TOKEN = 'temporary-reset'; f.env.ATTEMPT_RESET_ID = resetId;
+  const c = await f.start(); await f.request('/api/submit', {challengeId:c.id,text:f.writing()});
+  assert.equal((await f.request('/api/admin/reset-attempts', {resetId:crypto.randomUUID(),confirm:'clear-attempts-and-usage'}, auth)).status, 403);
+  const body = {resetId,confirm:'clear-attempts-and-usage'};
+  assert.equal((await f.request('/api/admin/reset-attempts', body, auth)).status, 409);
+  assert.equal((await budgetState(f.db)).reservedCents, 15);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM attempt_resets').get()!.n, 0);
+  await f.result(c.id);
+  const response = await f.request('/api/admin/reset-attempts', body, auth); assert.equal(response.status, 200);
+  delete f.env.ATTEMPT_RESET_TOKEN; delete f.env.ATTEMPT_RESET_ID;
+  assert.equal((await f.request('/api/admin/reset-attempts', body, auth)).status, 401);
+  assert.equal((await budgetState(f.db)).reservedCents, 15);
+});
+test("a failed reset rolls back both the deletion and its billing transfer", async () => {
+  const f = fixture(), c = await f.start();
+  await f.request('/api/submit',{challengeId:c.id,text:f.writing()}); await f.result(c.id);
+  f.sql.exec("CREATE TRIGGER fail_reset BEFORE DELETE ON challenges BEGIN SELECT RAISE(ABORT, 'fixture failure'); END");
+  const body={resetId:crypto.randomUUID(),confirm:'clear-attempts-and-usage'}, auth={authorization:'Bearer unit-test-admin'};
+  assert.equal((await f.request('/api/admin/reset-attempts',body,auth)).status,503);
+  assert.equal((await budgetState(f.db)).reservedCents,15);
+  assert.equal(f.sql.prepare('SELECT prior_reserved_cents FROM demo_budget').get()!.prior_reserved_cents,0);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM challenges').get()!.n,1);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM demo_results').get()!.n,1);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS n FROM attempt_resets').get()!.n,0);
+  f.sql.exec('DROP TRIGGER fail_reset');
+  assert.equal((await f.request('/api/admin/reset-attempts',body,auth)).status,200);
+  assert.equal((await budgetState(f.db)).reservedCents,15);
+});
 test("server grants access only after its own provider result; grants expire", async () => {
   const f = fixture(), c = await f.start();
   assert.equal((await f.request("/api/submit", { challengeId: c.id, text: f.writing(), passed: true })).status, 202);
@@ -456,7 +522,7 @@ test("result image sharing requires its completed result owner and remains idemp
     assert.equal(new Headers(options?.headers).get('x-result-state'), 'passed');
     return Response.json({ saved:true });
   };
-  const share = (method = 'POST', cookie = f.cookie, origin = 'http://localhost', body: Uint8Array | null = png, extra: Record<string,string> = {}) => handleApi(new Request(`http://localhost/api/result-image?id=${c.id}`, {method,headers:{cookie,origin,'content-type':'image/png',...extra},body:method==='POST'&&body?body.buffer as ArrayBuffer:null}),f.env,{now:1_800_000_000_001,fetcher});
+  const share = (method = 'POST', cookie = f.cookie, origin = 'http://localhost', body: Uint8Array | null = png, extra: Record<string,string> = {}) => handleApi(new Request(`http://localhost/api/result-image?id=${c.id}&v=4`, {method,headers:{cookie,origin,'content-type':'image/png',...extra},body:method==='POST'&&body?body.buffer as ArrayBuffer:null}),f.env,{now:1_800_000_000_001,fetcher});
   assert.equal((await share('POST','')).status,401);
   assert.equal((await share()).status,404, 'unfinished results cannot upload');
   await f.request('/api/submit',{challengeId:c.id,text:f.writing()}); await f.result(c.id);
@@ -484,10 +550,58 @@ test("uncertain result uploads retry the same opaque key and serialize simultane
   await f.request('/api/submit',{challengeId:c.id,text:f.writing()}); await f.result(c.id);
   const png = new Uint8Array(33); png.set([137,80,78,71,13,10,26,10]);
   const urls: string[] = []; let fail = true, release: (() => void) | undefined;
-  const upload = () => handleApi(new Request(`http://localhost/api/result-image?id=${c.id}`,{method:'POST',headers:{cookie:f.cookie,origin:'http://localhost','content-type':'image/png'},body:png}),f.env,{now:1_800_000_000_001,fetcher:async url=>{urls.push(String(url));if(fail)throw new Error('unavailable');await new Promise<void>(r=>{release=r;});return Response.json({saved:true});}});
+  const upload = () => handleApi(new Request(`http://localhost/api/result-image?id=${c.id}&v=4`,{method:'POST',headers:{cookie:f.cookie,origin:'http://localhost','content-type':'image/png'},body:png}),f.env,{now:1_800_000_000_001,fetcher:async url=>{urls.push(String(url));if(fail)throw new Error('unavailable');await new Promise<void>(r=>{release=r;});return Response.json({saved:true});}});
   assert.equal((await upload()).status,503); fail=false;
   const first = upload();
   while (!release) await new Promise(r=>setTimeout(r,1));
   assert.equal((await upload()).status,409); release(); assert.equal((await first).status,200);
   assert.equal(urls.length,2); assert.equal(urls[0],urls[1]);
+});
+
+test("sharing an old result rotates its image URL once and rejects stale renderer uploads", async () => {
+  const f = fixture(), c = await f.start(); f.env.RESULT_IMAGE_TOKEN = 'test-image-secret';
+  await f.request('/api/submit', {challengeId:c.id,text:f.writing()}); await f.result(c.id);
+  const oldId = 'a'.repeat(64), now = 1_800_000_000_001;
+  f.sql.prepare('INSERT INTO result_shares (challenge_id,share_id,created_at,uploaded_at) VALUES (?,?,?,?)').run(c.id,oldId,now-1000,now-500);
+  assert.deepEqual(await (await f.request(`/api/result-image?id=${c.id}&v=4`)).json(), {shareUrl:null,imageUrl:null});
+  const png = new Uint8Array(33); png.set([137,80,78,71,13,10,26,10]);
+  const uploaded: string[] = [];
+  const post = (version:string) => handleApi(new Request(`http://localhost/api/result-image?id=${c.id}&v=${version}`, {method:'POST',headers:{cookie:f.cookie,origin:'http://localhost','content-type':'image/png'},body:png}), f.env, {now,fetcher:async url=>{uploaded.push(String(url));return Response.json({saved:true});}});
+  assert.equal((await post('2')).status,409);
+  assert.equal((await post('')).status,409);
+  assert.equal(f.sql.prepare('SELECT share_id FROM result_shares WHERE challenge_id=?').get(c.id)?.share_id,oldId);
+  const response = await post('4'); assert.equal(response.status,200);
+  const current = await response.json() as {shareUrl:string;imageVersion:number};
+  assert.equal(current.imageVersion,4); assert.ok(!current.shareUrl.endsWith(oldId));
+  assert.deepEqual(await (await post('4')).json(),current); assert.equal(uploaded.length,1);
+  assert.deepEqual(await (await f.request(`/api/result-image?id=${c.id}&v=4`)).json(),current);
+  assert.equal(f.sql.prepare('SELECT COUNT(*) AS total FROM result_shares WHERE challenge_id=?').get(c.id)?.total,1);
+});
+
+test("an open tab's unversioned upload still works and cannot downgrade a newer image", async () => {
+  const f = fixture(), c = await f.start(); f.env.RESULT_IMAGE_TOKEN = 'test-image-secret';
+  await f.request('/api/submit', {challengeId:c.id,text:f.writing()}); await f.result(c.id);
+  const png = new Uint8Array(33); png.set([137,80,78,71,13,10,26,10]);
+  const uploaded: string[] = [];
+  const post = (query='') => handleApi(new Request(`http://localhost/api/result-image?id=${c.id}${query}`, {method:'POST',headers:{cookie:f.cookie,origin:'http://localhost','content-type':'image/png'},body:png}),f.env,{now:1_800_000_000_001,fetcher:async url=>{uploaded.push(String(url));return Response.json({saved:true});}});
+  const legacyResponse = await post(); assert.equal(legacyResponse.status,200);
+  const legacy = await legacyResponse.json() as {shareUrl:string;imageVersion:number};
+  assert.equal(legacy.imageVersion,2); assert.equal(uploaded.length,1);
+  assert.deepEqual(await (await post()).json(),legacy); assert.equal(uploaded.length,1);
+  assert.deepEqual(await (await f.request(`/api/result-image?id=${c.id}&v=4`)).json(),{shareUrl:null,imageUrl:null});
+  const current = await (await post('&v=4')).json() as {shareUrl:string;imageVersion:number};
+  assert.equal(current.imageVersion,4); assert.notEqual(current.shareUrl,legacy.shareUrl); assert.equal(uploaded.length,2);
+  assert.deepEqual(await (await post()).json(),current); assert.equal(uploaded.length,2);
+  assert.deepEqual(await (await f.request(`/api/result-image?id=${c.id}`)).json(),current);
+});
+
+test("a legacy upload cannot acquire a newer image's pending upload slot", async () => {
+  const f = fixture(), c = await f.start(); f.env.RESULT_IMAGE_TOKEN = 'test-image-secret';
+  await f.request('/api/submit', {challengeId:c.id,text:f.writing()}); await f.result(c.id);
+  f.sql.prepare('INSERT INTO result_shares (challenge_id,share_id,created_at,image_version) VALUES (?,?,?,4)').run(c.id,'a'.repeat(64),1_800_000_000_000);
+  const png = new Uint8Array(33); png.set([137,80,78,71,13,10,26,10]);
+  let uploads=0;
+  const response=await handleApi(new Request(`http://localhost/api/result-image?id=${c.id}`,{method:'POST',headers:{cookie:f.cookie,origin:'http://localhost','content-type':'image/png'},body:png}),f.env,{now:1_800_000_000_001,fetcher:async()=>{uploads++;return Response.json({saved:true});}});
+  assert.equal(response.status,409); assert.equal(uploads,0);
+  assert.equal(f.sql.prepare('SELECT image_version FROM result_shares WHERE challenge_id=?').get(c.id)?.image_version,4);
 });

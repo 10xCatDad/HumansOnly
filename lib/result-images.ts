@@ -1,5 +1,6 @@
-export const RESULT_IMAGE_VERSION = 2;
-export type SavedResultImage = { id: string; image: Blob; hasStory: boolean; savedAt: number; version: 1 | 2 };
+import { RESULT_IMAGE_VERSION } from "./result-image-version";
+export { RESULT_IMAGE_VERSION } from "./result-image-version";
+export type SavedResultImage = { id: string; image: Blob; savedAt: number; version: number };
 export const RESULT_IMAGE_SAVED = "humansonly-result-image-saved";
 
 function openDatabase(): Promise<IDBDatabase> {
@@ -19,7 +20,7 @@ export async function loadResultImage(id: string): Promise<SavedResultImage | nu
         const request = db.transaction("images", "readonly").objectStore("images").get(id);
         request.onsuccess = () => {
           const row = request.result as SavedResultImage | undefined;
-          resolve(row && [1, 2].includes(row.version) && row.image instanceof Blob && row.image.type === "image/png" ? row : null);
+          resolve(row && row.version === RESULT_IMAGE_VERSION && row.image instanceof Blob && row.image.type === "image/png" ? row : null);
         };
         request.onerror = () => reject(request.error);
       });
@@ -32,19 +33,13 @@ export async function saveResultImage(row: SavedResultImage): Promise<SavedResul
     try {
       const saved = await new Promise<SavedResultImage>((resolve, reject) => {
         const transaction = db.transaction("images", "readwrite"), store = transaction.objectStore("images");
-        let chosen = row;
-        const current = store.get(row.id);
-        current.onsuccess = () => {
-          const previous = current.result as SavedResultImage | undefined;
-          if (previous && [1, 2].includes(previous.version) && previous.hasStory && !row.hasStory) chosen = previous;
-          else store.put(row);
-          const all = store.getAll();
-          all.onsuccess = () => {
-            const rows = all.result as SavedResultImage[];
-            rows.sort((a, b) => b.savedAt - a.savedAt).slice(50).forEach(item => store.delete(item.id));
-          };
+        store.put(row);
+        const all = store.getAll();
+        all.onsuccess = () => {
+          const rows = all.result as SavedResultImage[];
+          rows.sort((a, b) => b.savedAt - a.savedAt).slice(50).forEach(item => store.delete(item.id));
         };
-        transaction.oncomplete = () => resolve(chosen);
+        transaction.oncomplete = () => resolve(row);
         transaction.onerror = () => reject(transaction.error);
         transaction.onabort = () => reject(transaction.error);
       });

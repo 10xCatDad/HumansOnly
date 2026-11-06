@@ -36,6 +36,20 @@
       "when": 1793976719211,
       "tag": "0004_real_northstar",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1793979942494,
+      "tag": "0005_premium_maestro",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793981837946,
+      "tag": "0006_familiar_ezekiel",
+      "breakpoints": true
     }
   ]
 }

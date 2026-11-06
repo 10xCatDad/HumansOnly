@@ -1,0 +1,1 @@
+ALTER TABLE `result_shares` ADD `image_version` integer DEFAULT 2 NOT NULL;

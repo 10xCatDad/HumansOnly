@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 import { initializeBudget, reserveScan, budgetState } from "../lib/budget.ts";
+import { resetAttempts } from "../lib/attempt-reset.ts";
+import { overallStats } from "../lib/stats.ts";
 
 test("real D1 atomically enforces the lifetime budget and three-try quotas", async () => {
   const mf = new Miniflare(convertV4MiniflareOptions({
@@ -27,6 +29,12 @@ test("real D1 atomically enforces the lifetime budget and three-try quotas", asy
       reserveScan(budgetDb, `challenge-${i}`, `session-${i}`, `network-${i}`, Date.now())));
     assert.equal(claims.filter(Boolean).length, 33);
     assert.equal((await budgetState(budgetDb)).reservedCents, 495);
+    const resetId=crypto.randomUUID();
+    const resets=await Promise.all(Array.from({length:5},()=>resetAttempts(budgetDb,resetId,Date.now())));
+    assert.ok(resets.every(value=>value===resets[0]));
+    assert.equal((await budgetState(budgetDb)).reservedCents,495);
+    assert.equal((await budgetState(budgetDb,'session-0','network-0')).attemptsRemaining,3);
+    assert.equal((await overallStats(budgetDb)).attempts,0);
     await initializeBudget(budgetDb, Date.now() + 86_400_000);
     assert.equal(await reserveScan(budgetDb, "later", "fresh", "fresh", Date.now()), null);
     const networkClaims = await Promise.all(Array.from({ length: 10 }, (_, i) =>

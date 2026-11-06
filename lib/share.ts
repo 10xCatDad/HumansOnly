@@ -6,6 +6,6 @@ export function shareText(result: "passed" | "rejected", attemptsRemaining: numb
     ? `@10xCatDad I just beat Level ${CHALLENGE_LEVEL} of HumansOnly! :D`
     : `@10xCatDad I failed Level ${CHALLENGE_LEVEL} of HumansOnly! :( (${remaining === null ? "unlimited" : `${remaining}/3`} tries remaining)`;
 }
-export function intentUrl(result: "passed" | "rejected", attemptsRemaining: number | null, resultUrl?: string) {
-  return `https://twitter.com/intent/tweet?${new URLSearchParams({ text: `${shareText(result, attemptsRemaining)}${resultUrl ? `\n\n${resultUrl}` : ""}` })}`;
+export function intentUrl(result: "passed" | "rejected", attemptsRemaining: number | null) {
+  return `https://twitter.com/intent/tweet?${new URLSearchParams({ text: shareText(result, attemptsRemaining) })}`;
 }

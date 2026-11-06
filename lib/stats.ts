@@ -11,7 +11,7 @@ export async function captureCompletedResults(db: D1Database) {
 
 export async function overallStats(db: D1Database) {
   const row = await db.prepare(`SELECT
-    prior_reserved_cents / ? + (SELECT COUNT(*) FROM demo_reservations WHERE budget_id = ?) AS attempts,
+    COALESCE(prior_attempts, prior_reserved_cents / ?) + (SELECT COUNT(*) FROM demo_reservations WHERE budget_id = ?) AS attempts,
     (SELECT COUNT(*) FROM demo_results WHERE demo_id = ? AND outcome = 'passed') AS passed,
     (SELECT COUNT(*) FROM demo_results WHERE demo_id = ? AND outcome = 'rejected') AS failed,
     (SELECT COUNT(*) FROM demo_results WHERE demo_id = ? AND outcome = 'error') AS errors

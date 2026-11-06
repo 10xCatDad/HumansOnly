@@ -5,7 +5,7 @@ const prompt = { setting: 'A coastal village in 1920', characters: 'Two estrange
 function challenge() { return { id:'browser-fixture',precheck:'passed',prompt,state:'open',createdAt:Date.now(),expiresAt:Date.now()+1800000,minWords:200,maxWords:250 }; }
 const story = ['library','umbrella','promise',...Array(197).fill('story')].join(' ');
 async function mockApi(page, {configured=true, outcome='passed', attemptsRemaining=3, closedReason=null, budgetDuringSubmit=false,gatePass=true}={}) {
-  let submitted=false,completed=false,unlocked=false,shared=false; const submittedAt=Date.now()-10000;
+  let submitted=false,completed=false,unlocked=false; const submittedAt=Date.now()-10000;
   const checks={precheck:'passed',pangram:{human:outcome==='passed'?1:0.125,ai:outcome==='passed'?0:0.75,assisted:outcome==='passed'?0:0.125},detectorPassed:outcome==='passed',concepts:{setting:true,characters:true,conflict:true,story:true}};
   // Cloudflare and paid checks are explicit fixtures in this UI suite.
   await page.addInitScript(({gatePass})=>{
@@ -29,7 +29,6 @@ async function mockApi(page, {configured=true, outcome='passed', attemptsRemaini
       submitted=true;data={state:'checking',attemptsRemaining:Math.max(0,attemptsRemaining-1)};
     }
     if(path==='/api/result'){completed=true;data={state:outcome,submittedAt,accessExpiresAt:Date.now()+3600000,checks};}
-    if(path==='/api/result-image'){if(route.request().method()==='POST')shared=true;data=shared?{shareUrl:'https://art.10xcatdad.xyz/r/'+ 'a'.repeat(64),imageUrl:'https://art.10xcatdad.xyz/r/'+ 'a'.repeat(64)+'/image.png'}:{shareUrl:null,imageUrl:null};}
     if(path==='/api/room')data={title:'You made it through.',message:'This response came from the protected endpoint.',expiresAt:Date.now()+3600000,receipt:'fixture'};
     if(path==='/api/report'||path==='/api/feedback')data={recorded:true};
     await route.fulfill({json:data});
@@ -140,10 +139,10 @@ test('automated browser is blocked and hidden instructions are present',async({p
   expect(await (await request.get('/robots.txt')).text()).toContain('User-agent: Twitterbot\nAllow: /');
   expect((await request.post('/api/challenge',{data:{},headers:{origin:'http://localhost:5188','user-agent':'ChatGPT-User'}})).status()).toBe(403);
 });
-test('result overlay creates a compact image and opens a browser X draft with an unlisted link',async({page})=>{
+test('result overlay downloads its image and opens a browser X draft without links',async({page})=>{
   await page.addInitScript(()=>{
     window.__opened=[];window.__imageText=[];window.__nativeShares=0;
-    window.open=(...args)=>{window.__opened.push(args);return {opener:window,closed:false,document:{title:'',body:{textContent:''},createElement:()=>({}),head:{appendChild(){}}},location:{replace:url=>{window.__draft=url;}}};};
+    window.open=(...args)=>{window.__opened.push(args);window.__draft=args[0];return null;};
     Object.defineProperty(navigator,'canShare',{value:()=>true,configurable:true});
     Object.defineProperty(navigator,'share',{value:async()=>{window.__nativeShares++;},configurable:true});
     const original=CanvasRenderingContext2D.prototype.fillText;
@@ -157,17 +156,19 @@ test('result overlay creates a compact image and opens a browser X draft with an
   await expect(dialog.locator('.check-details h3')).toHaveText(['CLOUDFLARE PRECHECKPass','STORY CONTENT & SUBJECT VALIDATIONPass','STORY AUTHOR VALIDATIONFail']);
   await expect(dialog.getByRole('img',{name:'HumansOnly result image: Fail'})).toBeVisible();
   const share=dialog.getByRole('button',{name:'SHARE TO X'});await expect(share).toBeEnabled();
-  const downloadEvent=page.waitForEvent('download');await dialog.getByRole('link',{name:'Save image',exact:true}).click();const download=await downloadEvent;await share.click();
+  await expect(dialog.getByText('Downloads the PNG and opens X. Attach it using X’s photo button before posting.')).toBeVisible();
+  const downloadEvent=page.waitForEvent('download');await share.click();const download=await downloadEvent;
   await expect.poll(()=>page.evaluate(()=>window.__draft)).toContain('twitter.com/intent/tweet');
   expect(await page.evaluate(()=>window.__nativeShares)).toBe(0);
   await download.saveAs('outputs/share-result-test.png');expect(download.suggestedFilename()).toBe('humansonly-result.png');
   const opened=await page.evaluate(()=>window.__opened);expect(opened).toHaveLength(1);
   const url=new URL(await page.evaluate(()=>window.__draft));expect(url.hostname).toBe('twitter.com');
-  expect(url.searchParams.get('text')).toBe('@10xCatDad I failed Level 1 of HumansOnly! :( (2/3 tries remaining)\n\nhttps://art.10xcatdad.xyz/r/'+ 'a'.repeat(64));
-  expect(url.searchParams.get('text')).not.toContain('https://captcha.');expect(url.searchParams.get('text').length).toBeLessThanOrEqual(280);
+  expect(url.searchParams.get('text')).toBe('@10xCatDad I failed Level 1 of HumansOnly! :( (2/3 tries remaining)');
+  expect(url.searchParams.get('text')).not.toMatch(/https?:\/\//);expect(url.searchParams.get('text').length).toBeLessThanOrEqual(280);
+  await expect(dialog.getByRole('status')).toContainText('Attach humansonly-result.png in X before posting.');
   expect(opened[0][1]).toBe('_blank');expect(opened[0][2]).toContain('popup');expect(page.url()).toMatch(/:5188\/$/);
-  const drawn=await page.evaluate(()=>window.__imageText);expect(drawn.filter(t=>t.startsWith('library umbrella')||t.startsWith('story'))).toHaveLength(4);
-  expect(drawn[0]).toBe('captcha.10xCatDad.xyz');expect(drawn.some(t=>/^\d{4}-\d{2}-\d{2} .* UTC$/.test(t))).toBe(true);expect(drawn).toContain('STORY EXCERPT');expect(drawn.some(t=>t.includes('https://'))).toBe(false);
+  const drawn=await page.evaluate(()=>window.__imageText);expect(drawn.some(t=>t.startsWith('library umbrella')||t.startsWith('story'))).toBe(false);
+  expect(drawn[0]).toBe('captcha.10xcatdad.xyz');expect(drawn.some(t=>/^\d{4}-\d{2}-\d{2} .* UTC$/.test(t))).toBe(true);expect(drawn).not.toContain('STORY EXCERPT');expect(drawn).toContain('LEVEL 1 // RESULT');expect(drawn).toContain('The captcha held.');expect(drawn).toContain('75% AI');expect(drawn).toContain('12.5% AI-assisted');expect(drawn).toContain('12.5% human');expect(drawn.some(t=>t.includes('https://'))).toBe(false);
   const sharePosition=await share.boundingBox(), feedbackPosition=await dialog.getByText('How was it written? (optional)').boundingBox();
   expect(feedbackPosition.y).toBeGreaterThan(sharePosition.y);
   await page.screenshot({path:'outputs/result-overlay-dark.png',fullPage:true});
@@ -176,7 +177,9 @@ test('result overlay creates a compact image and opens a browser X draft with an
   const history=page.getByRole('region',{name:'Previous Results'});await history.getByRole('button',{name:/Attempt 1.*Fail/}).click();
   const previous=history.getByRole('img',{name:'HumansOnly result image: Fail'});await expect(previous).toBeVisible();
   expect(await previous.evaluate(async img=>Array.from(new Uint8Array(await (await fetch(img.src)).arrayBuffer())))).toEqual(imageBytes);
-  await expect(history.getByText('Unlisted // anyone with the link can view this image.')).toBeVisible();
+  await expect(history.getByText('Downloads the PNG and opens X. Attach it using X’s photo button before posting.')).toBeVisible();
+  const savedAgain=page.waitForEvent('download');await history.getByRole('link',{name:'Save image',exact:true}).click();
+  expect((await savedAgain).suggestedFilename()).toBe('humansonly-result.png');
 });
 
 test('failed browser check cannot obtain a writing prompt',async({page})=>{
@@ -205,20 +208,21 @@ test('remaining attempts and saved check results remain visible after refresh',a
   await page.screenshot({path:'outputs/mobile-history.png',fullPage:true});
 });
 
-test('mobile sharing stays in the browser with an unlisted URL when local storage is blocked',async({page})=>{
+test('mobile sharing downloads the image without links when local storage is blocked',async({page})=>{
   await page.addInitScript(()=>{
     Object.defineProperty(window,'indexedDB',{get(){throw new DOMException('Storage blocked','SecurityError');},configurable:true});
     Object.defineProperty(navigator,'canShare',{value:()=>true,configurable:true});
     Object.defineProperty(navigator,'share',{value:async()=>{throw new Error('OS share must not open');},configurable:true});
-    window.open=()=>({opener:window,closed:false,document:{title:'',body:{textContent:''},createElement:()=>({}),head:{appendChild(){}}},location:{replace:url=>{window.__draft=url;}}});
+    window.open=url=>{window.__draft=url;return null;};
   });
   await mockApi(page);await page.setViewportSize({width:390,height:844});await page.goto('/');await page.getByRole('button',{name:'BEGIN ATTEMPT'}).click();
   await page.getByRole('textbox').fill(story);await page.getByRole('button',{name:'SUBMIT SOLUTION'}).click();
   const dialog=page.getByRole('dialog',{name:'Pass',exact:true});await expect(dialog.getByRole('img')).toBeVisible();
-  await dialog.getByRole('button',{name:'SHARE TO X'}).click();
+  const downloadEvent=page.waitForEvent('download');await dialog.getByRole('button',{name:'SHARE TO X'}).click();
+  expect((await downloadEvent).suggestedFilename()).toBe('humansonly-result.png');
   await expect.poll(()=>page.evaluate(()=>window.__draft)).toContain('twitter.com/intent/tweet');
   const url=new URL(await page.evaluate(()=>window.__draft));
-  expect(url.searchParams.get('text')).toBe('@10xCatDad I just beat Level 1 of HumansOnly! :D\n\nhttps://art.10xcatdad.xyz/r/'+'a'.repeat(64));
+  expect(url.searchParams.get('text')).toBe('@10xCatDad I just beat Level 1 of HumansOnly! :D');
   expect(url.searchParams.get('text').length).toBeLessThanOrEqual(280);
   expect(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);await page.screenshot({path:'outputs/result-overlay-mobile.png',fullPage:true});
 });
@@ -278,13 +282,19 @@ test('copy prompt gives clean plain text for another window without submitting',
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
 
-test('X sharing falls back to image download when image hosting is unavailable',async({page})=>{
-  await page.addInitScript(()=>{window.open=()=>({opener:window,closed:false,document:{title:'',body:{textContent:''},createElement:()=>({}),head:{appendChild(){}}},location:{replace:url=>{window.__draft=url;}}});});
+test('sharing does not contact the image host and provides a link if the draft window is blocked',async({page})=>{
+  await page.addInitScript(()=>{window.open=()=>null;});
   await mockApi(page,{outcome:'rejected'});
-  await page.route('**/api/result-image?*',route=>route.fulfill({status:503,json:{message:'Unavailable'}}));
+  const imageRequests=[];
+  await page.route(/\/api\/result-image|art\.10xcatdad\.xyz/,route=>{imageRequests.push(route.request().url());return route.fulfill({status:503,json:{message:'Unavailable'}});});
   await page.goto('/');await page.getByRole('button',{name:'BEGIN ATTEMPT'}).click();await page.getByRole('textbox').fill(story);await page.getByRole('button',{name:'SUBMIT SOLUTION'}).click();
   const dialog=page.getByRole('dialog',{name:'Fail',exact:true});await expect(dialog.getByRole('img')).toBeVisible();
-  const download=page.waitForEvent('download');await dialog.getByRole('button',{name:'SHARE TO X'}).click();expect((await download).suggestedFilename()).toBe('humansonly-result.png');
-  await expect(dialog.getByRole('status')).toContainText('Attach the downloaded image');
-  expect(new URL(await page.evaluate(()=>window.__draft)).searchParams.get('text')).not.toContain('https://');
+  const downloadEvent=page.waitForEvent('download');await dialog.getByRole('button',{name:'SHARE TO X'}).click();
+  expect((await downloadEvent).suggestedFilename()).toBe('humansonly-result.png');
+  await expect(dialog.getByRole('status')).toContainText('Attach humansonly-result.png in X before posting.');
+  const draft=new URL(await dialog.getByRole('link',{name:'Open X draft'}).getAttribute('href'));
+  expect(draft.hostname).toBe('twitter.com');
+  expect(draft.searchParams.get('text')).toBe('@10xCatDad I failed Level 1 of HumansOnly! :( (2/3 tries remaining)');
+  expect(imageRequests).toEqual([]);
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
 });
