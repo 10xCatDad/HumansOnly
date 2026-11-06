@@ -2,7 +2,7 @@ import { ACCESS_MS, CHALLENGE_MS, createPrompt, inspectWriting, MAX_WORDS, MIN_W
 import { getResult, submitText, ProviderError, type Fetcher } from "./pangram.ts";
 import { initializeBudget, budgetState, reserveScan, DEMO_ID, SCAN_RESERVATION_CENTS, PANGRAM_MODEL } from "./budget.ts";
 import { captureCompletedResults, overallStats } from "./stats.ts";
-import { parseConcepts, conceptsPass, type CheckDetails } from "./validation.ts";
+import { parseConcepts, conceptsPass, type CheckDetails, type AttemptResult } from "./validation.ts";
 import { turnstileReady, verifyTurnstile, TurnstileUnavailable, type TurnstileEnv } from "./turnstile.ts";
 
 export type AppEnv = TurnstileEnv & { DB?: D1Database; PANGRAM_API_KEY?: string; PANGRAM_MODEL?: string; RATE_LIMIT_SECRET?: string; ADMIN_TOKEN?: string; VALIDATOR_TOKEN?: string };
@@ -91,6 +91,21 @@ async function authorized(request: Request, secret?: string) {
   return !!secret && !!supplied && await hash(supplied) === await hash(secret);
 }
 function details(c: Challenge): CheckDetails | null { return c.check_details ? JSON.parse(c.check_details) : null; }
+async function attemptHistory(db: D1Database, sessionId?: string): Promise<AttemptResult[]> {
+  if (!sessionId) return [];
+  const rows = await db.prepare(`
+    SELECT id, state, submitted_at, check_details, policy_version FROM challenges
+    WHERE session_id = ? AND submitted_at IS NOT NULL AND state IN ('passed', 'rejected', 'error')
+    UNION ALL
+    SELECT r.challenge_id AS id, d.outcome AS state, r.created_at AS submitted_at, NULL AS check_details, NULL AS policy_version
+    FROM demo_reservations r JOIN demo_results d ON d.challenge_id = r.challenge_id AND d.demo_id = r.budget_id
+    WHERE r.session_id = ? AND r.budget_id = ? AND NOT EXISTS (SELECT 1 FROM challenges c WHERE c.id = r.challenge_id)
+    ORDER BY submitted_at DESC, id DESC LIMIT 3
+  `).bind(sessionId, sessionId, DEMO_ID).all<{ id: string; state: AttemptResult["state"]; submitted_at: number; check_details: string | null; policy_version: string | null }>();
+  return rows.results.map(row => ({ id: row.id, state: row.state, submittedAt: row.submitted_at,
+    precheck: row.policy_version ? row.policy_version === POLICY_VERSION ? "passed" : "not-run" : null,
+    checks: row.check_details ? JSON.parse(row.check_details) : null }));
+}
 async function finish(db: D1Database, c: Challenge, result: CheckDetails, version: string, now: number) {
   const passed = result.detectorPassed && conceptsPass(result.concepts);
   const state = passed ? "passed" : "rejected";
@@ -149,7 +164,7 @@ export async function handleApi(request: Request, env: AppEnv, options: { fetche
     if (path === "/api/status" && request.method === "GET") {
       const session = await sessionFor(request, db, now);
       const current = session ? await db.prepare("SELECT * FROM challenges WHERE session_id = ? AND ((policy_version = ? AND state = 'open' AND expires_at > ?) OR (state = 'checking' AND policy_version IN ('writing-turnstile-v4', 'writing-concepts-v3'))) ORDER BY created_at DESC LIMIT 1").bind(session.id, POLICY_VERSION, now).first<Challenge>() : null;
-      return json({ ...await availability(env, db, now, session?.id, await networkKey(request, env)), overall: await overallStats(db), accessExpiresAt: session && session.grant_expires_at > now ? session.grant_expires_at : null, challenge: current ? publicChallenge(current) : null });
+      return json({ ...await availability(env, db, now, session?.id, await networkKey(request, env)), history: await attemptHistory(db, session?.id), overall: await overallStats(db), accessExpiresAt: session && session.grant_expires_at > now ? session.grant_expires_at : null, challenge: current ? publicChallenge(current) : null });
     }
     if (path === "/api/challenge" && request.method === "POST") {
       const network = await networkKey(request, env);

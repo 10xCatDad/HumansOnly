@@ -18,3 +18,5 @@
 - Keep the local validator outbound-only and tool-free. Never feed submissions or model output into commands, executable code, file paths, or native agent/tool RPCs. Preserve strict parsing, request limits, and service hardening.
 - Main heading: "Bad Robot, Go Away (Challenge I)". Keep the HumansOnly brand.
 - Stories must contain 200–250 words. Keep X composer text under 280 characters; put the full story, prompt, and detailed check results in the downloadable result image.
+- Use self-hosted Space Grotesk for website typography. Keep the begin button uppercase and label its instructions as the captcha process.
+- Keep attempts remaining prominent. Previous results are private to the current session; never return other visitors’ results or store story text for history.

@@ -6,6 +6,7 @@ import { handleApi, type AppEnv } from "../lib/server.ts";
 import { createPrompt, inspectWriting, CHALLENGE_MS, ACCESS_MS } from "../lib/challenge.ts";
 import { interpretResult, submitText } from "../lib/pangram.ts";
 import { initializeBudget, reserveScan, budgetState } from "../lib/budget.ts";
+import type { AttemptResult } from "../lib/validation.ts";
 
 class Statement {
   sql: string; values: unknown[] = []; db: DatabaseSync;
@@ -349,4 +350,43 @@ test('story word limits are 200 through 250 without charging invalid attempts',a
   assert.equal(f.calls,0);
   assert.equal(inspectWriting(Array(200).fill('story').join(' ')).valid,true);
   assert.equal(inspectWriting(Array(250).fill('story').join(' ')).valid,true);
+});
+
+test('previous results survive refresh and stay private to their owning session',async()=>{
+  const f=fixture(), first=await f.start();
+  assert.deepEqual((await (await f.request('/api/status')).json() as {history:AttemptResult[]}).history,[]);
+  await f.request('/api/submit',{challengeId:first.id,text:f.writing()});await f.complete(first.id);
+  const firstCookie=f.cookie;
+  for(let i=0;i<2;i++) {
+    const response=await f.request('/api/status');
+    const data=await response.json() as {history:AttemptResult[];attemptsRemaining:number};
+    assert.equal(response.headers.get('cache-control'),'no-store, private');
+    assert.equal(data.attemptsRemaining,2);assert.equal(data.history.length,1);
+    assert.equal(data.history[0].id,first.id);assert.equal(data.history[0].state,'passed');
+    assert.equal(data.history[0].checks?.precheck,'passed');
+    assert.deepEqual(Object.keys(data.history[0]).sort(),['checks','id','precheck','state','submittedAt']);
+  }
+  f.cookie='';f.tick(1000);const second=await f.start();
+  await f.request('/api/submit',{challengeId:second.id,text:f.writing()});await f.complete(second.id,{setting:false,characters:true,conflict:true,story:true});
+  const own=await (await f.request('/api/status')).json() as {history:AttemptResult[]};
+  assert.deepEqual(own.history.map(r=>r.id),[second.id]);assert.equal(own.history[0].state,'rejected');
+  f.cookie=firstCookie;
+  assert.deepEqual((await (await f.request(`/api/status?session_id=${second.id}`)).json() as {history:AttemptResult[]}).history.map(r=>r.id),[first.id]);
+  f.cookie='';assert.deepEqual((await (await f.request('/api/status')).json() as {history:AttemptResult[]}).history,[]);
+});
+
+test('history retains outcomes after detail cleanup without resetting attempts',async()=>{
+  const f=fixture(), c=await f.start();await f.request('/api/submit',{challengeId:c.id,text:f.writing()});await f.complete(c.id);
+  f.sql.prepare('DELETE FROM challenges WHERE id=?').run(c.id);
+  const data=await (await f.request('/api/status')).json() as {history:AttemptResult[];attemptsRemaining:number};
+  assert.equal(data.attemptsRemaining,2);assert.equal(data.history.length,1);
+  assert.equal(data.history[0].id,c.id);assert.equal(data.history[0].state,'passed');
+  assert.equal(data.history[0].checks,null);assert.equal(data.history[0].precheck,null);
+});
+
+test('history includes service errors without labeling them failed checks',async()=>{
+  const f=fixture(), c=await f.start();f.failSubmit();await f.request('/api/submit',{challengeId:c.id,text:f.writing()});
+  const data=await (await f.request('/api/status')).json() as {history:AttemptResult[];attemptsRemaining:number};
+  assert.equal(data.attemptsRemaining,2);assert.equal(data.history[0].state,'error');
+  assert.equal(data.history[0].precheck,'passed');assert.equal(data.history[0].checks,null);
 });

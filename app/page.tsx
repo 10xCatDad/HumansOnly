@@ -7,8 +7,9 @@ import { ThemeSwitch } from "@/components/ThemeSwitch";
 import { ShareResult } from "@/components/ShareResult";
 import { ResultDetails } from "@/components/ResultDetails";
 import { SuccessFireworks } from "@/components/SuccessFireworks";
+import { AttemptHistory } from "@/components/AttemptHistory";
 import { BrowserGate } from "@/components/BrowserGate";
-import type { CheckDetails, PrecheckResult } from "@/lib/validation";
+import type { CheckDetails, PrecheckResult, AttemptResult } from "@/lib/validation";
 
 type Challenge = { precheck?: PrecheckResult; id: string; prompt: StoryPrompt; state: string; createdAt: number; expiresAt: number; minWords: number; maxWords: number };
 type Phase = "intro" | "gate" | "writing" | "checking" | "passed" | "rejected" | "error" | "room" | "closed";
@@ -16,7 +17,7 @@ type Room = { title: string; message: string; expiresAt: number; receipt: string
 type Overall = { attempts: number; passed: number; failed: number; errors: number; unfinished: number };
 const DRAFT_KEY = "humanity-draft-v3";
 
-type ApiResult = { turnstileSiteKey?: string | null; checks?: CheckDetails | null; configured: boolean; challenge: Challenge; state: Phase; accessExpiresAt: number | null; delayed?: boolean; serviceMessage?: string; attemptsRemaining?: number; closedReason?: "budget" | "attempts" | null; overall?: Overall };
+type ApiResult = { history?: AttemptResult[]; turnstileSiteKey?: string | null; checks?: CheckDetails | null; configured: boolean; challenge: Challenge; state: Phase; accessExpiresAt: number | null; delayed?: boolean; serviceMessage?: string; attemptsRemaining?: number; closedReason?: "budget" | "attempts" | null; overall?: Overall };
 class ApiError extends Error { status: number; code?: string; constructor(message: string, status: number, code?: string) { super(message); this.status = status; this.code = code; } }
 
 async function api<T = ApiResult>(path: string, body?: unknown): Promise<T> {
@@ -30,6 +31,7 @@ async function api<T = ApiResult>(path: string, body?: unknown): Promise<T> {
 }
 
 export default function Home() {
+  const [history, setHistory] = useState<AttemptResult[] | null>(null);
   const [phase, setPhase] = useState<Phase>("intro");
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [text, setText] = useState("");
@@ -60,7 +62,7 @@ export default function Home() {
     if (navigator.webdriver) { setAutomated(true); setConfigured(false); setServiceMessage("Automated interaction is not allowed."); return; }
     api("/api/status").then(data => {
       if (!alive) return;
-      setConfigured(data.configured); setTurnstileSiteKey(data.turnstileSiteKey || null);
+      setHistory(data.history || []); setConfigured(data.configured); setTurnstileSiteKey(data.turnstileSiteKey || null);
       if (data.overall) setOverall(data.overall);
       setServiceMessage(data.serviceMessage || "");
       setAttemptsRemaining(data.attemptsRemaining ?? 3); setClosedReason(data.closedReason || null);
@@ -119,7 +121,7 @@ export default function Home() {
   async function refreshAvailability() {
     try {
       const data = await api("/api/status");
-      setConfigured(data.configured); setTurnstileSiteKey(data.turnstileSiteKey || null); setServiceMessage(data.serviceMessage || "");
+      setHistory(data.history || []); setConfigured(data.configured); setTurnstileSiteKey(data.turnstileSiteKey || null); setServiceMessage(data.serviceMessage || "");
       if (data.overall) setOverall(data.overall);
       setAttemptsRemaining(data.attemptsRemaining ?? 3); setClosedReason(data.closedReason || null);
     } catch { /* A failed status refresh never grants access or increases attempts. */ }
@@ -190,16 +192,16 @@ export default function Home() {
         <div className="main-grid">
           <section className="introduction">
             <h1>Bad Robot, Go Away <span className="title-context">(Challenge I)</span></h1>
-            <p className="intro-copy">See if your favorite LLM can get past the defenses. Good luck! (challenges II through V coming soon)</p>
+            <p className="intro-copy">See if your favorite LLM can get past this captcha. Good luck! (challenges II through V coming soon)</p>
             {overall && <div className="overall-stats" aria-label="Stats (Since Launch)"><span>Stats (Since Launch):</span><span><strong>{overall.attempts}</strong> {overall.attempts === 1 ? "attempt" : "attempts"}</span><span><strong>{overall.passed}</strong> passed</span><span><strong>{overall.failed}</strong> failed</span>{overall.errors > 0 && <span>{overall.errors} service {overall.errors === 1 ? "error" : "errors"}</span>}{overall.unfinished > 0 && <span>{overall.unfinished} unfinished</span>}</div>}
           </section>
           <section className={`challenge-card ${phase === "writing" ? "is-writing" : ""}`} id="challenge" aria-label="Writing challenge">
-            <div className="card-topline"><span><span className={`status-dot ${phase === "passed" || phase === "room" ? "success" : ""}`} />{phase === "passed" || phase === "room" ? "ACCESS GRANTED" : "WRITING CHECK"}</span><span>3 tries</span></div>
+            <div className="card-topline"><span><span className={`status-dot ${phase === "passed" || phase === "room" ? "success" : ""}`} />{phase === "passed" || phase === "room" ? "ACCESS GRANTED" : "WRITING CHECK"}</span><span className="attempts-remaining" aria-label="Attempts remaining" aria-live="polite"><strong>{configured === null ? "…" : attemptsRemaining}<small> / 3</small></strong><span>attempts left</span></span></div>
             {configured === false && !["passed", "room", "closed"].includes(phase) && <div className="setup-notice" role="status"><strong>Checks unavailable.</strong> {serviceMessage || "You can still view a prompt."}</div>}
             {phase === "intro" && <div className="welcome-content">
-              <h2 ref={heading} tabIndex={-1}>Get a random prompt</h2>
-              <p>Write 200–250 words using the setting and time, characters, and conflict you’re given. There’s always a cat involved. Your story is checked for AI writing and the prompt requirements. You get 3 tries.</p>
-              <button className="primary-button" onClick={() => void start()} disabled={busy || automated || configured === null || !!closedReason}>{busy ? "Loading…" : "begin captcha attempt // prove your humanity"}<ArrowRight size={19} /></button>
+              <h2 ref={heading} tabIndex={-1}>How this captcha works</h2>
+              <p>Complete the browser check, then write a 200–250 word story using your random setting/time, characters, and conflict. There’s always a cat. Pass the AI-writing and story checks to unlock the protected page. You get 3 tries.</p>
+              <button className="primary-button" onClick={() => void start()} disabled={busy || automated || configured === null || !!closedReason}><span>{busy ? "LOADING…" : "BEGIN CAPTCHA ATTEMPT // PROVE YOUR HUMANITY"}</span><ArrowRight size={19} /></button>
             </div>}
             {phase === "gate" && <div className="welcome-content browser-gate"><h2 ref={heading} tabIndex={-1}>Browser check</h2><p>Complete this check to get your writing prompt.</p>{turnstileSiteKey ? <BrowserGate key={gateAttempt} siteKey={turnstileSiteKey} onVerified={token => void start(token)} onError={setMessage} /> : <p role="status">The browser check is temporarily unavailable.</p>}{busy && <p role="status">Opening your prompt…</p>}<button className="text-button" onClick={() => { setMessage(""); setGateAttempt(n => n + 1); void refreshAvailability(); }} disabled={busy}>Retry browser check</button></div>}
             {phase === "closed" && <div className="result-content"><h2 ref={heading} tabIndex={-1}>{closedReason === "attempts" ? "No tries left" : "Demo budget reached"}</h2><p>{serviceMessage}</p></div>}
@@ -224,8 +226,9 @@ export default function Home() {
             {message && <div className="feedback-message" role="alert">{message}</div>}
           </section>
         </div>
+        {history && <AttemptHistory results={history} />}
         <section className="faq-section" id="how-it-works" aria-label="Details">
-          <details><summary>Data and privacy<span>+</span></summary><p>Cloudflare Turnstile checks browser signals before issuing a prompt. Text goes to Pangram for AI detection and OpenAI for the story check. This site does not save the text. Drafts stay in this tab. Prompt details, counts, timings, results, and feedback are removed after 30 days when a new prompt is issued. Anonymous attempt records and totals stay for this test. The session cookie lasts up to a year. See <a href="https://www.pangram.com/privacy-policy" target="_blank" rel="noreferrer">Pangram’s privacy policy</a> and <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noreferrer">OpenAI’s privacy policy</a> for their handling of submitted text. See <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noreferrer">Cloudflare’s privacy policy</a> for the browser check.</p></details>
+          <details><summary>Data and privacy<span>+</span></summary><p>Cloudflare Turnstile checks browser signals before issuing a prompt. Text goes to Pangram for AI detection and OpenAI for the story check. This site does not save the text. Drafts stay in this tab. Prompt details, timings, detailed check results, and feedback are removed after 30 days when a new prompt is issued. Anonymous attempt records and totals stay for this test. The session cookie lasts up to a year. See <a href="https://www.pangram.com/privacy-policy" target="_blank" rel="noreferrer">Pangram’s privacy policy</a> and <a href="https://openai.com/policies/privacy-policy/" target="_blank" rel="noreferrer">OpenAI’s privacy policy</a> for their handling of submitted text. See <a href="https://www.cloudflare.com/privacypolicy/" target="_blank" rel="noreferrer">Cloudflare’s privacy policy</a> for the browser check.</p></details>
           <details><summary>What does a pass mean?<span>+</span></summary><p>The text was classified as human-written and met the story requirements. Either check can be wrong. A pass does not prove you are human. Access lasts one hour.</p></details>
           <details><summary>Writing options<span>+</span></summary><p>Type, paste, or dictate. Prompts are in English and expire after 30 minutes. There is no alternate verification method in this demo.</p></details>
         </section>
