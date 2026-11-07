@@ -21,7 +21,7 @@
 - Turnstile must succeed on the server before a new writing prompt is issued. Keep hostname/action validation and production test-key rejection; never rely only on the widget UI.
 - Results use overall Pass/Fail as the heading, followed by Cloudflare precheck, Codex story validation, and STORY AUTHOR VALIDATION, in that order. Preserve this order in sharing.
 - Keep the local validator outbound-only and tool-free. Never feed submissions or model output into commands, executable code, file paths, or native agent/tool RPCs. Preserve strict parsing, request limits, and service hardening.
-- Main heading: "Bad Robot, Go Away // Challenge I". Keep the HumansOnly brand.
+- Main heading: "Bad Robot, Go Away" followed by "Challenge I", with no separator before "Challenge I". Keep the HumansOnly brand.
 - Stories must contain 200–250 words. Keep X composer text under 280 characters; put the result summary and detailed check results in the downloadable result image. Match the white browser result panel, independent of the selected theme; omit the prompt, story excerpt, and interactive close button. Include the X logo beside the handle.
 - Use self-hosted Space Grotesk for website typography. Keep primary action buttons uppercase and label their instructions as the captcha process.
 - Keep attempts remaining prominent. Previous results are private to the current session; never return other visitors’ results or store story text on the server for history. Cache result images in the visitor’s browser. Sharing downloads a PNG for direct attachment on X without uploading to an external host. Keep images out of Git and gallery listings. Previously created unlisted image links remain accessible to anyone with the link.

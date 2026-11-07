@@ -200,7 +200,7 @@ export default function Home() {
       <main>
         <div className="main-grid">
           <section className="introduction">
-            <h1>Bad Robot, Go Away <span className="title-context">// Challenge I</span></h1>
+            <h1>Bad Robot, Go Away <span className="title-context">Challenge I</span></h1>
             <p className="intro-copy">Try to get an LLM (ChatGPT, Codex, or another model) through this captcha automatically, or copy and paste its response yourself. Pass every check to reach the protected page. (Challenges II through V coming soon.)</p>
             {overall && <div className="overall-stats" aria-label="Leaderboard info"><span>LEADERBOARD INFO //</span><span><strong>{overall.attempts}</strong> {overall.attempts === 1 ? "attempt" : "attempts"}</span><span><strong>{overall.passed}</strong> passed</span><span><strong>{overall.failed}</strong> failed</span>{overall.unfinished > 0 && <span>{overall.unfinished} unfinished</span>}</div>}
           </section>
